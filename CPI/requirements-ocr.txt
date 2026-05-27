@@ -1,0 +1,6 @@
+# Local scan match (queue_tif_review.py default).
+# Prefer: Tesseract binary + pytesseract. Set TESSERACT_CMD if the binary is not on PATH.
+# macOS without Tesseract: pip install pyobjc-framework-Vision (on-device Apple Vision OCR).
+Pillow>=10.0.0
+pytesseract>=0.3.10
+pyobjc-framework-Vision>=10.0; sys_platform == "darwin"

@@ -1,0 +1,25 @@
+# macOS / editor
+.DS_Store
+
+# Python
+.venv*/
+__pycache__/
+*.pyc
+.pptx_deps/
+
+# Sensitive / local-only files at repo root
+*.xlsx
+*.pptx
+DECK/
+
+# Operational Paystand data — keep local only (CSVs, TIFs, previews)
+CPI/APRIL/
+CPI/MAY/
+CPI/**/Paystand_*
+CPI/**/tif_*.csv
+CPI/**/verification_previews/
+CPI/**/*.tif
+CPI/**/*.png
+
+# Optional local reference docs (not needed for cloud agent)
+TABLA_SEMANTICA_*.txt
