@@ -5,7 +5,7 @@ and the expected TIF path: <image_dir>/<Transaction Id>.tif
 
 Output rows are sorted by Mail Stop (A-Z), then Invoice Number, then Transaction ID. Invoice Number echoes the Paystand export value for verification.
 
-Merchant (payee) is resolved by Mail Stop via a built-in lookup table. Optional mail_stop_merchants.csv
+Merchant (payee) is resolved by Mail Stop via mail_stop_merchants.csv in CPI/ (embedded table is fallback only).
 (under --run-dir, invoice folder, or script folder) can override entries (columns: Mail Stop, Merchant).
 
 Page frames are read from each TIF for TIF Page Count and Needs Human. Use export_verification_previews.py
@@ -30,7 +30,7 @@ TIF presence is inferred from the image folder and TIF Path; there is no separat
 
 Scan Notes contain only OCR match diagnostics (no duplicate of TIF Page Count / Merchant / Check Amount flags).
 
-Optional merchant_aliases.csv (columns Merchant, AlsoKnownAs) adds payee name variants; see tif_scan_match builtins.
+merchant_aliases.csv in CPI/ (columns Merchant, AlsoKnownAs) lists payee name variants for OCR matching.
 """
 from __future__ import annotations
 
@@ -194,14 +194,15 @@ def load_merchant_csv_overrides(search_dirs: list[Path]) -> dict[str, str]:
 
 
 def merchant_lookup_merged(search_dirs: list[Path]) -> dict[str, str]:
-    merged = dict(MAIL_STOP_MERCHANT)
-    merged.update(load_merchant_csv_overrides(search_dirs))
+    merged = load_merchant_csv_overrides(search_dirs)
+    if not merged:
+        merged = dict(MAIL_STOP_MERCHANT)
     return merged
 
 
 def load_merchant_aliases(search_dirs: list[Path]) -> dict[str, list[str]]:
-    """Merchant -> alternate strings that may appear on checks (merged with builtins)."""
-    out: dict[str, list[str]] = builtin_merchant_aliases()
+    """Merchant -> alternate strings that may appear on checks (from merchant_aliases.csv; builtins if missing)."""
+    out: dict[str, list[str]] = {}
     for d in search_dirs:
         p = d / "merchant_aliases.csv"
         if not p.is_file():
@@ -219,6 +220,8 @@ def load_merchant_aliases(search_dirs: list[Path]) -> dict[str, list[str]]:
                 if not m or not aka:
                     continue
                 out.setdefault(m, []).append(aka)
+    if not out:
+        out = builtin_merchant_aliases()
     return out
 
 
@@ -495,7 +498,11 @@ def main() -> None:
         raise SystemExit(f"Folder not found: {args.image_dir}")
 
     merchant_lookup_dirs = unique_dirs(
-        [*( [args.run_dir.resolve()] if args.run_dir else [] ), args.invoice_csv.resolve().parent, here]
+        [
+            here,
+            *( [args.run_dir.resolve()] if args.run_dir else [] ),
+            args.invoice_csv.resolve().parent,
+        ]
     )
     merchant_lookup = merchant_lookup_merged(merchant_lookup_dirs)
     merchant_aliases = load_merchant_aliases(merchant_lookup_dirs)
