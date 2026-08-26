@@ -16,7 +16,7 @@ Two scan types (see "Scan Type" column):
 
 Output rows are sorted by Mail Stop (A-Z), then Invoice Number, then Transaction ID. Invoice Number echoes the Paystand export value for verification.
 
-Merchant (payee) is resolved by Mail Stop via mail_stop_merchants.csv in CPI/ (embedded table is fallback only).
+Merchant (payee) is resolved by Mail Stop via mail_stop_merchants.csv in CPI/LOCKBOX RULES/ (embedded table is fallback only).
 (under --run-dir, invoice folder, or script folder) can override entries (columns: Mail Stop, Merchant).
 
 Page frames are read from each TIF for TIF Page Count and Needs Human. Use export_verification_previews.py
