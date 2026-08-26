@@ -15,11 +15,18 @@ DECK/
 # Operational Paystand data — keep local only (CSVs, TIFs, previews)
 CPI/APRIL/
 CPI/MAY/
+CPI/JUNE/
+CPI/JULY/
+CPI/AUGUST/
 CPI/**/Paystand_*
 CPI/**/tif_*.csv
 CPI/**/verification_previews/
 CPI/**/*.tif
 CPI/**/*.png
+CPI/**/*.zip
+
+# Cursor local MCP config (not the lockbox agent)
+.cursor/mcp.json
 
 # Optional local reference docs (not needed for cloud agent)
 TABLA_SEMANTICA_*.txt

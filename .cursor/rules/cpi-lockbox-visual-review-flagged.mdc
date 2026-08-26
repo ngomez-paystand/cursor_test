@@ -1,0 +1,32 @@
+---
+description: CPI/Lockbox — revisar visualmente cada transacción marcada Needs Human? y escribir el resultado en los archivos
+globs: CPI/**
+alwaysApply: false
+---
+
+# Revisión visual — parte del flujo, no solo del chat
+
+Cuando `queue_tif_review.py` deja `Needs Human? = yes`, **antes de reportar al usuario**, abrir el TIF (páginas a PNG) y confirmar a ojo payee y monto vs CSV.
+
+## Escribir el resultado en los archivos
+
+No dejar las falsas alarmas marcadas en `tif_review_queue.csv` / `lockbox_report.xlsx`.
+
+- **Falsa alarma** (cheque sí coincide):
+  1. `python3 queue_tif_review.py --run-dir <día> --visual-clear TID1,TID2`
+     (no re-corre OCR; pone `Needs Human? = no`. Scan Notes conserva el texto del OCR y
+     termina: `Additional visual review by LUCAS confirmed payee and amount on TIF.`).
+  2. Regenerar `lockbox_report.xlsx` para que esas filas queden `Good? = y`.
+- **Mal ruteo** (el payee del cheque es otro merchant conocido, p. ej. CBUSA en un Mail Stop de Sharetru): dejar `Needs Human? = yes`. Es el hallazgo de más prioridad.
+- **Pendiente real** (otro payee/monto, no es cheque, alias nuevo, duda): dejar `Needs Human? = yes` y reportarlo.
+- Patrón nuevo y confiable de “not a check”: proponer ajuste en `_NON_CHECK_DOCUMENT_PATTERNS`.
+
+## Cómo reportar
+
+Resumen **después** de `--visual-clear` y regenerar el lockbox.
+
+1. **MAL RUTEO** primero, si hay: etiqueta en negritas y mayúsculas, Transaction ID, Mail Stop/merchant del CSV vs payee real del cheque, monto. No enterrarlo debajo de las falsas alarmas. Estos casos son raros y críticos.
+2. Otras pendientes reales: qué se vio en el TIF.
+3. Falsas alarmas: una línea corta, ya limpiadas.
+
+Este paso es estándar; no pedir permiso para renderizar las imágenes marcadas.

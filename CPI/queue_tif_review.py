@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
 """
-Build a queue of transactions with no detected invoice (Invoice Number = 0/empty)
-and the expected TIF path: <image_dir>/<Transaction Id>.tif
+Build a queue covering every invoice-detail row and the expected TIF path:
+<image_dir>/<Transaction Id>.tif
+
+Two scan types (see "Scan Type" column):
+- "No Invoice" (Invoice Number = 0/empty): full scan — merchant AND check amount must match the
+  TIF, same rules as before.
+- "Invoice On File" (Invoice Number present): lighter misroute check only — the invoice number is
+  assumed to already validate amount/application, so only the payee is checked. Needs Human? is
+  yes ONLY when the OCR payee clearly matches a DIFFERENT already-known merchant (mail_stop_merchants.csv
+  / merchant_aliases.csv) — a likely misroute. Ambiguous cases (illegible scan, or a payee that
+  matches neither the expected merchant nor any other known merchant — most likely just an
+  alias/DBA we haven't catalogued) are intentionally NOT flagged, to avoid burying real misroutes
+  in noise from every unseen alias.
 
 Output rows are sorted by Mail Stop (A-Z), then Invoice Number, then Transaction ID. Invoice Number echoes the Paystand export value for verification.
 
@@ -11,9 +22,8 @@ Merchant (payee) is resolved by Mail Stop via mail_stop_merchants.csv in CPI/ (e
 Page frames are read from each TIF for TIF Page Count and Needs Human. Use export_verification_previews.py
 to rasterize every page to PNG under verification_previews/<Transaction Id>/.
 
-Needs Human? is the primary decision column for the queue: it must be yes whenever Merchant Match or Amount Match
-is blank, Missing, Not Legible, or Not Matched — only when both are Matched and there is no Poor Scan flag
-(and file/export/page rules pass) is it no.
+Needs Human? is yes when Merchant Match or Amount Match is not Matched, or TIF/export/page rules fail.
+Poor Scan (low OCR confidence) alone does not set Needs Human? when both matches are Matched.
 
 Local OCR compares CSV Merchant (payee) and Check Amount to text read from all pages of each TIF.
 Merchant Match / Amount Match are written as Matched, Not Matched, Missing, or Not Legible (internal logic still
@@ -23,9 +33,9 @@ uses yes/no/skipped). Scan Notes carry OCR diagnostics. Engine order: Tesseract 
 TIF Path in the CSV is the .tif filename only (e.g. 43022185.tif); files live under the Image*Detail* folder.
 CSV cells may still use a legacy file:// URI from older exports; scripts accept both.
 
-Needs Human? (after Payer) is the most important column; Reason explains it. It is yes unless the TIF is present,
-page count is readable (when requested), the export has merchant and amount, both internal matches are yes
-(CSV columns show Matched), and there is no Poor Scan flag.
+Needs Human? (after Payer) is the most important column; Reason explains it. It is no only when the TIF is present,
+page count is readable (when requested), export merchant/amount are present, and both matches are Matched.
+Poor Scan may still appear in Scan Notes (without "human review") but does not force Needs Human? when both are Matched.
 TIF presence is inferred from the image folder and TIF Path; there is no separate TIF Exists column.
 
 Scan Notes contain only OCR match diagnostics (no duplicate of TIF Page Count / Merchant / Check Amount flags).
@@ -36,12 +46,18 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Union
 from urllib.parse import urlparse, unquote
 
-from tif_scan_match import analyze_tif_against_csv, builtin_merchant_aliases
-
+from tif_scan_match import (
+    analyze_tif_against_csv,
+    analyze_tif_for_misroute,
+    builtin_merchant_aliases,
+    detect_non_check_document,
+)
 
 def tif_path_from_queue_cell(cell: str, image_dir: Path) -> Path:
     """
@@ -121,6 +137,9 @@ _MAIL_STOP_MERCHANT_LINES = """
 164	Tegus Inc
 165	Early Stage Solutions, LLC
 166	Sharetru
+168	Global Surf Industries Inc
+170	Iantrek, Inc.
+171	Aloha Collection, Inc.
 201	Nonstop Administration and Insurance Services Inc - 201
 """
 
@@ -143,6 +162,502 @@ MAIL_STOP_MERCHANT = _parse_mail_stop_merchant_lines(_MAIL_STOP_MERCHANT_LINES)
 def is_missing_invoice(value: str) -> bool:
     t = (value or "").strip()
     return t in ("0", "0.0", "")
+
+
+# Paystand export layouts: leading cols, Payer (may contain commas), trailing cols.
+_PAYSTAND_INVOICE_HEAD_COLS = 6
+_PAYSTAND_INVOICE_TAIL_COLS = 4
+_PAYSTAND_CHECK_HEAD_COLS = 6
+_PAYSTAND_CHECK_TAIL_COLS = 2
+_PAYSTAND_IMAGE_META_HEAD_COLS = 10
+_PAYSTAND_IMAGE_META_TAIL_COLS = 1
+
+
+def _realigned_paystand_payer_fields(
+    fields: list[str],
+    expected_cols: int,
+    *,
+    head_cols: int,
+    tail_cols: int,
+) -> list[str]:
+    """Merge extra CSV fields into Payer when commas in payer were not quoted."""
+    n = expected_cols
+    if len(fields) == n:
+        return fields
+    if len(fields) > n and len(fields) >= head_cols + tail_cols + 1:
+        payer = ",".join(fields[head_cols : len(fields) - tail_cols])
+        return fields[:head_cols] + [payer] + fields[-tail_cols:]
+    if len(fields) < n:
+        return fields + [""] * (n - len(fields))
+    return fields
+
+
+def _realigned_paystand_invoice_fields(fields: list[str], expected_cols: int) -> list[str]:
+    return _realigned_paystand_payer_fields(
+        fields,
+        expected_cols,
+        head_cols=_PAYSTAND_INVOICE_HEAD_COLS,
+        tail_cols=_PAYSTAND_INVOICE_TAIL_COLS,
+    )
+
+
+def fix_paystand_export_csv(
+    csv_path: Path,
+    *,
+    head_cols: int,
+    tail_cols: int,
+    backup: bool = True,
+) -> int:
+    """Rewrite a Paystand export CSV with payer commas quoted, and strip stray/misplaced
+    quote characters left over from malformed export quoting (see MALFORMED_QUOTE in
+    audit_paystand_csv_commas). Returns rows realigned or cleaned."""
+    raw_text = csv_path.read_text(encoding="utf-8", errors="replace")
+    raw_lines_all = raw_text.splitlines(keepends=True)
+    reader = csv.reader(raw_lines_all)
+    header = next(reader, None)
+    if not header:
+        return 0
+    n = len(header)
+    body = list(reader)
+    if not body:
+        return 0
+    footer = body[-1]
+    data = body[:-1]
+    fixed: list[list[str]] = []
+    realigned = 0
+    raw_cursor = 1
+    for fields in data:
+        merged = any("\n" in (f or "") for f in fields)
+        consumed_lines = 1 + sum((f or "").count("\n") for f in fields)
+        row_raw_lines = raw_lines_all[raw_cursor : raw_cursor + consumed_lines]
+        raw_cursor += consumed_lines
+        malformed_quote = (not merged) and _row_has_malformed_quote(row_raw_lines)
+        changed = len(fields) != n or malformed_quote
+        if changed:
+            realigned += 1
+        aligned = _realigned_paystand_payer_fields(
+            fields, n, head_cols=head_cols, tail_cols=tail_cols
+        )
+        if len(aligned) != n:
+            raise ValueError(f"Could not realign row in {csv_path}: {fields[:8]}...")
+        if malformed_quote and len(aligned) > head_cols:
+            aligned = list(aligned)
+            aligned[head_cols] = _strip_stray_quotes(aligned[head_cols])
+        fixed.append(aligned)
+    if backup:
+        bak = csv_path.with_suffix(csv_path.suffix + ".bak")
+        if not bak.is_file():
+            import shutil
+
+            shutil.copy2(csv_path, bak)
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        w.writerows(fixed)
+        w.writerow(footer)
+    return realigned
+
+
+@dataclass
+class CommaIssueRow:
+    line_no: int
+    transaction_id_wrong: str
+    transaction_id_correct: str
+    invoice_number: str
+    check_amount: str
+    payer: str
+    category: str
+    merged: bool = False
+    malformed_quote: bool = False
+
+
+@dataclass
+class CommaAuditReport:
+    label: str
+    path: Path
+    data_rows: int
+    misaligned: int
+    buckets: dict[str, int] = field(default_factory=dict)
+    issues: list[CommaIssueRow] = field(default_factory=list)
+    footer: list[str] = field(default_factory=list)
+    fixed: int = 0
+
+    @property
+    def merged_rows(self) -> list[CommaIssueRow]:
+        """Rows where an unterminated quote swallowed a following row (data loss risk)."""
+        return [i for i in self.issues if i.merged]
+
+    @property
+    def malformed_quote_rows(self) -> list[CommaIssueRow]:
+        """Rows with a stray/misplaced quote contained within a single row (no data loss;
+        auto-fixable by dropping the stray quote character(s))."""
+        return [i for i in self.issues if i.malformed_quote]
+
+
+def _row_has_malformed_quote(raw_lines: list[str]) -> bool:
+    """True if strict CSV parsing rejects this row's raw physical line(s).
+
+    A properly quoted field (including one with correctly escaped internal quotes, e.g. a
+    quoted nickname with each internal quote doubled) always parses fine under strict mode.
+    Only a stray/misplaced quote character (one that isn't a valid escape or the true
+    closing quote) trips this.
+    """
+    try:
+        list(csv.reader(raw_lines, strict=True))
+    except csv.Error:
+        return True
+    return False
+
+
+def _strip_stray_quotes(value: str) -> str:
+    """Drop stray literal double-quote characters left over from a malformed export field.
+
+    Only double quotes are removed (the one CSV-breaking character relevant here) — every
+    other character (apostrophes, punctuation, etc.) is left untouched.
+    """
+    return value.replace('"', "")
+
+
+def _payer_comma_category(payer: str) -> str:
+    up = (payer or "").upper()
+    if re.search(r",\s*LLC\b", up):
+        return "LLC"
+    if re.search(r",\s*INC\.?\b", up):
+        return "INC"
+    if " DBA " in up or " D/B/A " in up:
+        return "dba"
+    if re.search(r",\s*(NE|OHIO|TX|MA|MO|AZ|IL|CO|FL|CA|NC|GA|UT|DE)\b", up):
+        return "address"
+    return "other"
+
+
+def discover_check_csv(run_dir: Path) -> Path | None:
+    cs = sorted(run_dir.glob("*Check*Detail*.csv"), key=lambda p: p.name)
+    if not cs:
+        return None
+    pay = [p for p in cs if "Paystand" in p.name]
+    return pay[0] if pay else cs[0]
+
+
+def discover_image_metadata_csv(image_dir: Path) -> Path | None:
+    p = image_dir / "metadata.csv"
+    return p if p.is_file() else None
+
+
+def audit_paystand_csv_commas(
+    csv_path: Path,
+    *,
+    label: str,
+    head_cols: int,
+    tail_cols: int,
+    transaction_id_header: str = "Transaction Id",
+    invoice_number_header: str | None = "Invoice Number",
+    check_amount_header: str | None = "Check Amount",
+) -> CommaAuditReport:
+    """Detect unquoted payer commas on every data row (invoice 0 and invoiced rows alike).
+
+    Also detects two kinds of malformed quoting that a plain column-count check misses:
+    - MERGED_ROWS_DATA_LOSS: an unterminated quote swallows the next physical row whole
+      (a transaction disappears). Detected via an embedded raw newline in a parsed field.
+    - MALFORMED_QUOTE: a stray/misplaced quote is fully contained within one row (no rows
+      swallowed, column count often still correct by coincidence) but corrupts the Payer
+      text. Detected by re-parsing each row's raw physical line(s) with strict CSV rules
+      (`csv.reader(..., strict=True)`), which rejects any quote that isn't a valid escape
+      or true closing quote — exactly the case a lenient parser silently "recovers" from.
+    """
+    raw_text = csv_path.read_text(encoding="utf-8", errors="replace")
+    raw_lines_all = raw_text.splitlines(keepends=True)
+    reader = csv.reader(raw_lines_all)
+    header = next(reader, None)
+    if not header:
+        return CommaAuditReport(label, csv_path, 0, 0)
+    n = len(header)
+    body = list(reader)
+    if not body:
+        return CommaAuditReport(label, csv_path, 0, 0)
+    footer = body[-1]
+    data = body[:-1]
+    tid_idx = header.index(transaction_id_header) if transaction_id_header in header else None
+    inv_idx = (
+        header.index(invoice_number_header)
+        if invoice_number_header and invoice_number_header in header
+        else None
+    )
+    amt_idx = (
+        header.index(check_amount_header)
+        if check_amount_header and check_amount_header in header
+        else None
+    )
+    issues: list[CommaIssueRow] = []
+    buckets: dict[str, int] = {}
+    line_no = 2
+    raw_cursor = 1  # raw_lines_all[0] is the header
+    for fields in data:
+        # A field that itself contains a raw newline means a quote was left open (e.g. a
+        # stray extra `"` right before the closing quote) and csv.reader swallowed the next
+        # physical line into this one. This can happen even when len(fields) == n by sheer
+        # coincidence, silently merging two transactions into one row and losing one of them
+        # entirely — the plain column-count check below would miss it, so check it first.
+        merged = any("\n" in (f or "") for f in fields)
+        consumed_lines = 1 + sum((f or "").count("\n") for f in fields)
+        row_raw_lines = raw_lines_all[raw_cursor : raw_cursor + consumed_lines]
+        raw_cursor += consumed_lines
+        malformed_quote = (not merged) and _row_has_malformed_quote(row_raw_lines)
+        if len(fields) == n and not merged and not malformed_quote:
+            line_no += consumed_lines
+            continue
+        aligned = (
+            fields
+            if len(fields) == n
+            else _realigned_paystand_payer_fields(
+                fields, n, head_cols=head_cols, tail_cols=tail_cols
+            )
+        )
+        payer = aligned[head_cols] if len(aligned) > head_cols else ""
+        if merged:
+            category = "MERGED_ROWS_DATA_LOSS"
+        elif malformed_quote:
+            category = "MALFORMED_QUOTE"
+        else:
+            category = _payer_comma_category(payer)
+        buckets[category] = buckets.get(category, 0) + 1
+        wrong_tid = (
+            (fields[tid_idx] or "").strip()
+            if tid_idx is not None and len(fields) > tid_idx
+            else ""
+        )
+        correct_tid = (
+            (aligned[tid_idx] or "").strip()
+            if tid_idx is not None and len(aligned) > tid_idx
+            else ""
+        )
+        inv = (
+            (aligned[inv_idx] or "").strip()
+            if inv_idx is not None and len(aligned) > inv_idx
+            else ""
+        )
+        amt = (
+            (aligned[amt_idx] or "").strip()
+            if amt_idx is not None and len(aligned) > amt_idx
+            else ""
+        )
+        issues.append(
+            CommaIssueRow(
+                line_no=line_no,
+                transaction_id_wrong=wrong_tid,
+                transaction_id_correct=correct_tid,
+                invoice_number=inv,
+                check_amount=amt,
+                payer=payer,
+                category=category,
+                merged=merged,
+                malformed_quote=malformed_quote,
+            )
+        )
+        line_no += consumed_lines
+    return CommaAuditReport(
+        label=label,
+        path=csv_path,
+        data_rows=len(data),
+        misaligned=len(issues),
+        buckets=buckets,
+        issues=issues,
+        footer=footer,
+    )
+
+
+def audit_run_dir_exports(run_dir: Path) -> list[CommaAuditReport]:
+    """Audit invoice, check, and image metadata exports under a day folder."""
+    invoice_csv, image_dir = discover_invoice_and_images(run_dir)
+    reports = [
+        audit_paystand_csv_commas(
+            invoice_csv,
+            label="invoice",
+            head_cols=_PAYSTAND_INVOICE_HEAD_COLS,
+            tail_cols=_PAYSTAND_INVOICE_TAIL_COLS,
+        )
+    ]
+    check_csv = discover_check_csv(run_dir)
+    if check_csv:
+        reports.append(
+            audit_paystand_csv_commas(
+                check_csv,
+                label="check",
+                head_cols=_PAYSTAND_CHECK_HEAD_COLS,
+                tail_cols=_PAYSTAND_CHECK_TAIL_COLS,
+                invoice_number_header=None,
+                check_amount_header="Amount",
+            )
+        )
+    meta_csv = discover_image_metadata_csv(image_dir)
+    if meta_csv:
+        reports.append(
+            audit_paystand_csv_commas(
+                meta_csv,
+                label="image metadata",
+                head_cols=_PAYSTAND_IMAGE_META_HEAD_COLS,
+                tail_cols=_PAYSTAND_IMAGE_META_TAIL_COLS,
+                invoice_number_header=None,
+                check_amount_header="Amount",
+            )
+        )
+    return reports
+
+
+def ensure_run_dir_exports_commas_clean(
+    run_dir: Path,
+    *,
+    auto_fix: bool = True,
+    backup: bool = False,
+) -> list[CommaAuditReport]:
+    """Audit payer comma alignment; optionally rewrite exports with quoted payers."""
+    layout = {
+        "invoice": (_PAYSTAND_INVOICE_HEAD_COLS, _PAYSTAND_INVOICE_TAIL_COLS),
+        "check": (_PAYSTAND_CHECK_HEAD_COLS, _PAYSTAND_CHECK_TAIL_COLS),
+        "image metadata": (_PAYSTAND_IMAGE_META_HEAD_COLS, _PAYSTAND_IMAGE_META_TAIL_COLS),
+    }
+    initial = audit_run_dir_exports(run_dir)
+    fixed_by_label: dict[str, int] = {}
+    if auto_fix:
+        for report in initial:
+            if report.misaligned <= 0:
+                continue
+            head, tail = layout[report.label]
+            fixed_by_label[report.label] = fix_paystand_export_csv(
+                report.path, head_cols=head, tail_cols=tail, backup=backup
+            )
+    final = audit_run_dir_exports(run_dir) if fixed_by_label else initial
+    initial_by_label = {r.label: r for r in initial}
+    for report in final:
+        report.fixed = fixed_by_label.get(report.label, 0)
+        if report.fixed:
+            # The successfully-fixed rows (comma realignment, malformed-quote cleanup) no
+            # longer show up in a fresh re-audit — restore the pre-fix diagnostics here so
+            # the summary still reports what was actually wrong/changed. Rows that could NOT
+            # be fixed (merged/data-loss) are untouched by the fix step, so they're identical
+            # between initial and final either way.
+            pre = initial_by_label.get(report.label)
+            if pre:
+                report.buckets = pre.buckets
+                report.issues = pre.issues
+    return final
+
+
+def format_comma_audit_summary(reports: list[CommaAuditReport], *, run_dir: Path) -> str:
+    lines = [f"Comma audit: {run_dir}"]
+    total = sum(r.misaligned for r in reports)
+    fixed = sum(r.fixed for r in reports)
+    for r in reports:
+        lines.append(
+            f"  {r.label} ({r.path.name}): {r.data_rows} data rows, "
+            f"{r.misaligned} misaligned"
+            + (f", fixed {r.fixed}" if r.fixed else "")
+        )
+        if r.buckets:
+            parts = ", ".join(f"{k}={v}" for k, v in sorted(r.buckets.items()))
+            lines.append(f"    categories: {parts}")
+    if total == 0:
+        lines.append("  OK — no unquoted payer commas detected.")
+    elif fixed:
+        lines.append(f"  Repaired {fixed} row(s) across export file(s).")
+    wrong_tid = [
+        i
+        for r in reports
+        for i in r.issues
+        if i.transaction_id_wrong
+        and i.transaction_id_correct
+        and i.transaction_id_wrong != i.transaction_id_correct
+    ]
+    if wrong_tid:
+        lines.append(
+            f"  Transaction Id would have shifted on {len(wrong_tid)} row(s) before fix."
+        )
+        for issue in wrong_tid[:8]:
+            inv_note = f", inv={issue.invoice_number}" if issue.invoice_number else ", inv=0"
+            lines.append(
+                f"    line {issue.line_no}: {issue.transaction_id_wrong} -> "
+                f"{issue.transaction_id_correct}{inv_note} [{issue.category}]"
+            )
+        if len(wrong_tid) > 8:
+            lines.append(f"    … and {len(wrong_tid) - 8} more")
+    malformed = [(r, i) for r in reports for i in r.malformed_quote_rows]
+    if malformed:
+        lines.append(
+            f"  Cleaned {len(malformed)} malformed-quote Payer value(s) "
+            "(stray \" dropped; no columns shifted, no rows lost):"
+        )
+        for r, issue in malformed[:8]:
+            lines.append(
+                f"    {r.label} ({r.path.name}) line {issue.line_no}: "
+                f"tid={issue.transaction_id_correct or issue.transaction_id_wrong} "
+                f"payer(before)={issue.payer[:60]!r} -> "
+                f"payer(after)={_strip_stray_quotes(issue.payer)[:60]!r}"
+            )
+        if len(malformed) > 8:
+            lines.append(f"    … and {len(malformed) - 8} more")
+    merged = [(r, i) for r in reports for i in r.merged_rows]
+    if merged:
+        lines.append(
+            "  \U0001f6a8 CRITICAL: unterminated quote swallowed a following row "
+            "(DATA LOSS — a transaction is missing/merged). This is NOT auto-fixable; "
+            "edit the raw export by hand (remove the stray extra \" before the closing "
+            "quote) and re-run before trusting this day's output:"
+        )
+        for r, issue in merged:
+            lines.append(
+                f"    {r.label} ({r.path.name}) line {issue.line_no}: "
+                f"payer={issue.payer[:80]!r}..."
+            )
+    return "\n".join(lines)
+
+
+def has_critical_comma_issues(reports: list[CommaAuditReport]) -> bool:
+    """True if any report has an unfixable merged/data-loss row."""
+    return any(r.merged_rows for r in reports)
+
+
+def load_invoice_export_rows(invoice_csv: Path) -> list[dict]:
+    """
+    Paystand Invoice Detail rows for processing.
+
+    Payer names often contain unquoted commas (e.g. "VANA & SONS, LLC"); realign by
+    keeping the first 6 and last 4 columns fixed and merging the middle into Payer.
+
+    The export always includes a non-transaction footer as the last line (often sparse /
+    no Transaction Id); drop it so lockbox and queue counts match real payments only.
+    """
+    with invoice_csv.open(newline="", encoding="utf-8", errors="replace") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+        if not header:
+            return []
+        n = len(header)
+        rows: list[dict] = []
+        for fields in reader:
+            aligned = _realigned_paystand_invoice_fields(fields, n)
+            if len(aligned) != n:
+                continue
+            rows.append(dict(zip(header, aligned)))
+    if rows:
+        rows = rows[:-1]
+    return rows
+
+
+def load_invoice_export_footer(invoice_csv: Path) -> tuple[str, str] | None:
+    """Paystand Invoice Detail footer: row count and total amount (last CSV line)."""
+    with invoice_csv.open(newline="", encoding="utf-8", errors="replace") as f:
+        reader = csv.reader(f)
+        next(reader, None)
+        last: list[str] | None = None
+        for fields in reader:
+            last = fields
+    if not last or len(last) < 2:
+        return None
+    count = (last[0] or "").strip()
+    total = (last[1] or "").strip()
+    if not count and not total:
+        return None
+    return count, total
 
 
 def discover_invoice_and_images(run_dir: Path) -> tuple[Path, Path]:
@@ -304,6 +819,11 @@ def needs_human_reason(
       Missing merchant in CSV; Missing check amount in CSV; Missing merchant and check amount in CSV;
       Scan not legible; Merchant Doesn't Match; Check Amount Doesn't Match;
       Merchant and Check Amount Don't Match; Poor Scan.
+
+    Separately, rows missing a CSV check amount where the TIF confidently contains no bank-check
+    image at all (mailed notice, legal filing, envelope, internal policy, vendor letter — see
+    detect_non_check_document) short-circuit in build_record with Needs Human? = no and
+    Reason = "Not a check: <label>." before this function is even called.
     """
     if not needs_human:
         return "Merchant and Check Amount matches."
@@ -377,6 +897,28 @@ def build_record(
     incomplete = bool(export_issues)
     tid = (row.get("Transaction Id") or "").strip()
 
+    if ex and "Export missing check amount" in export_issues:
+        non_check_reason = detect_non_check_document(tif_path)
+        if non_check_reason:
+            return {
+                "Mail Stop": (row.get("Mail Stop") or "").strip(),
+                "Deposit Date": (row.get("Deposit Date") or "").strip(),
+                "Merchant": merchant_payee,
+                "Check Amount": (row.get("Check Amount") or "").strip(),
+                "Transaction ID": tid,
+                "Invoice Number": str(row.get("Invoice Number") or "").strip(),
+                "Scan Type": "No Invoice",
+                "Payer": (row.get("Payer") or "").strip(),
+                "Needs Human?": "no",
+                "Reason": f"Not a check: {non_check_reason}.",
+                "Merchant Match": "Not Checked",
+                "Amount Match": "Not Checked",
+                "TIF Path": tif_path.name,
+                "TIF Page Count": str(tif_page_count(tif_path)) if with_pages else "",
+                "Scan Notes": f"TIF has no PAY TO THE ORDER OF anchor on any page; "
+                f"OCR text matches known non-check pattern: {non_check_reason}.",
+            }
+
     scan = analyze_tif_against_csv(
         tif_path,
         merchant_csv=merchant_payee,
@@ -393,14 +935,14 @@ def build_record(
     csv_incomplete = incomplete
     m_ok = (merchant_match or "").strip().lower() == "yes"
     a_ok = (amount_match or "").strip().lower() == "yes"
-    # Authoritative flag: any blank/Missing/not legible/not matched column or Poor Scan → yes.
+    # Poor Scan alone does not require review when payee and amount both matched.
     needs_human = (
         (not ex)
         or (pages == "?")
         or csv_incomplete
         or (not m_ok)
         or (not a_ok)
-        or handwritten
+        or (handwritten and not (m_ok and a_ok))
     )
 
     reason = needs_human_reason(
@@ -421,6 +963,7 @@ def build_record(
         "Check Amount": (row.get("Check Amount") or "").strip(),
         "Transaction ID": tid,
         "Invoice Number": str(row.get("Invoice Number") or "").strip(),
+        "Scan Type": "No Invoice",
         "Payer": (row.get("Payer") or "").strip(),
         "Needs Human?": "yes" if needs_human else "no",
         "Reason": reason,
@@ -430,6 +973,148 @@ def build_record(
         "TIF Page Count": str(pages) if pages != "" else "",
         "Scan Notes": scan_notes_final,
     }
+
+
+def misroute_reason(status: str, matched_other_merchant: str | None) -> str:
+    """Closed vocabulary for Reason on 'Invoice On File' rows (amount is not checked here)."""
+    if status == "yes":
+        return "Merchant matches expected payee."
+    if status == "no" and matched_other_merchant:
+        return f'Possible Misroute: OCR payee matches "{matched_other_merchant}".'
+    if status == "no_legible":
+        return "Scan not legible; not reviewed (invoice already on file)."
+    if status == "skipped":
+        return "TIF file not found or merchant missing; not reviewed."
+    return "Invoice already on file; payee not recognized."
+
+
+def build_misroute_record(
+    row: dict,
+    tif: Path,
+    *,
+    with_pages: bool = True,
+    merchant_payee: str = "",
+    all_merchants: list[str],
+    merchant_aliases: dict[str, list[str]] | None = None,
+) -> dict:
+    """Lighter scan for invoice lines that already have an invoice number on file: only flags a
+    likely misroute (OCR payee matches a different KNOWN merchant). Amount is not checked."""
+    tif_path = tif
+    ex = tif_path.is_file()
+    pages: int | str = ""
+    if with_pages and ex:
+        pages = tif_page_count(tif_path)
+    tid = (row.get("Transaction Id") or "").strip()
+
+    result = analyze_tif_for_misroute(
+        tif_path,
+        merchant_csv=merchant_payee,
+        all_merchants=all_merchants,
+        merchant_aliases=(
+            merchant_aliases if merchant_aliases is not None else builtin_merchant_aliases()
+        ),
+    )
+    needs_human = result.status == "no"
+    reason = misroute_reason(result.status, result.matched_other_merchant)
+    merchant_match_display = {
+        "yes": "Matched",
+        "no": "Different Merchant",
+        "unrecognized": "Not Matched",
+        "no_legible": "Not Legible",
+        "skipped": "Missing",
+    }.get(result.status, result.status)
+
+    return {
+        "Mail Stop": (row.get("Mail Stop") or "").strip(),
+        "Deposit Date": (row.get("Deposit Date") or "").strip(),
+        "Merchant": merchant_payee,
+        "Check Amount": (row.get("Check Amount") or "").strip(),
+        "Transaction ID": tid,
+        "Invoice Number": str(row.get("Invoice Number") or "").strip(),
+        "Scan Type": "Invoice On File",
+        "Payer": (row.get("Payer") or "").strip(),
+        "Needs Human?": "yes" if needs_human else "no",
+        "Reason": reason,
+        "Merchant Match": merchant_match_display,
+        "Amount Match": "Not Checked",
+        "TIF Path": tif_path.name,
+        "TIF Page Count": str(pages) if pages != "" else "",
+        "Scan Notes": result.scan_notes,
+    }
+
+
+_VISUAL_CLEAR_NOTE = (
+    "Additional visual review by LUCAS confirmed payee and amount on TIF."
+)
+
+
+def parse_visual_clear_ids(raw: str) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for part in (raw or "").replace(" ", ",").split(","):
+        tid = part.strip()
+        if tid and tid not in seen:
+            seen.add(tid)
+            out.append(tid)
+    return out
+
+
+def apply_visual_review_clears(queue_csv: Path, transaction_ids: list[str]) -> tuple[int, list[str]]:
+    """Mark visually confirmed false alarms as Needs Human? = no in an existing queue CSV.
+
+    Does not re-run OCR. Only rows currently flagged yes for the given Transaction IDs
+    are rewritten (Merchant/Amount Match flipped to Matched; Reason set to the same
+    closed-vocab success string the OCR path uses). Returns (rows_cleared, missing_tids).
+    """
+    wanted = {t.strip() for t in transaction_ids if t.strip()}
+    if not wanted:
+        raise SystemExit("No Transaction IDs given to --visual-clear.")
+    if not queue_csv.is_file():
+        raise SystemExit(f"Queue CSV not found: {queue_csv}")
+
+    with queue_csv.open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+    if "Transaction ID" not in fieldnames or "Needs Human?" not in fieldnames:
+        raise SystemExit(f"Queue CSV missing Transaction ID or Needs Human?: {queue_csv}")
+
+    found: set[str] = set()
+    cleared = 0
+    for row in rows:
+        tid = (row.get("Transaction ID") or "").strip()
+        if tid not in wanted:
+            continue
+        found.add(tid)
+        if (row.get("Needs Human?") or "").strip().lower() != "yes":
+            continue
+        scan_type = (row.get("Scan Type") or "").strip()
+        row["Needs Human?"] = "no"
+        row["Merchant Match"] = "Matched"
+        notes = (row.get("Scan Notes") or "").strip()
+        notes = notes.replace(
+            "Visual review: payee and amount confirmed on TIF.", ""
+        ).replace(
+            "Visual review: payee confirmed on TIF (not a misroute).", ""
+        ).strip()
+        if scan_type == "Invoice On File":
+            row["Reason"] = "Merchant matches expected payee."
+        else:
+            row["Reason"] = "Merchant and Check Amount matches."
+            row["Amount Match"] = "Matched"
+        if _VISUAL_CLEAR_NOTE not in notes:
+            row["Scan Notes"] = f"{notes} {_VISUAL_CLEAR_NOTE}".strip() if notes else _VISUAL_CLEAR_NOTE
+        else:
+            row["Scan Notes"] = notes
+        cleared += 1
+
+    with queue_csv.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rows)
+
+    missing = [t for t in transaction_ids if t.strip() and t.strip() not in found]
+    return cleared, missing
 
 
 def main() -> None:
@@ -473,10 +1158,63 @@ def main() -> None:
         action="store_true",
         help="Do not read each TIF's page count (faster; TIF Page Count and page-related Notes left empty).",
     )
+    ap.add_argument(
+        "--comma-audit-only",
+        action="store_true",
+        help="Audit unquoted/malformed payer commas in invoice/check/image exports (report "
+        "only, never rewrites files); skip OCR queue.",
+    )
+    ap.add_argument(
+        "--visual-clear",
+        default="",
+        help="Comma-separated Transaction IDs visually confirmed as false alarms. Updates "
+        "tif_review_queue.csv in place (Needs Human?=no); does not re-run OCR.",
+    )
     args = ap.parse_args()
+
+    if args.visual_clear:
+        tids = parse_visual_clear_ids(args.visual_clear)
+        if args.run_dir is not None:
+            queue_csv = args.run_dir.resolve() / "tif_review_queue.csv"
+        elif args.output is not None:
+            queue_csv = args.output
+        else:
+            raise SystemExit("--visual-clear requires --run-dir or --output (the queue CSV).")
+        cleared, missing = apply_visual_review_clears(queue_csv, tids)
+        print(f"Visual review: cleared {cleared} row(s) in {queue_csv}")
+        if missing:
+            print(
+                "Warning: Transaction ID(s) not found in queue: " + ", ".join(missing),
+                flush=True,
+            )
+        return
 
     if args.run_dir is not None:
         run_dir = args.run_dir.resolve()
+        # Comma audit never rewrites the raw exports (auto_fix=False, always — see
+        # cpi-lockbox-comma-audit.mdc). ANY issue found (unquoted comma, malformed quote, or
+        # merged/data-loss rows) stops processing immediately; the user fixes the raw invoice/
+        # check/image-metadata CSVs by hand and re-runs.
+        comma_reports = ensure_run_dir_exports_commas_clean(
+            run_dir,
+            auto_fix=False,
+        )
+        any_issue = any(r.misaligned for r in comma_reports)
+        if not args.quiet or args.comma_audit_only or any_issue:
+            print(format_comma_audit_summary(comma_reports, run_dir=run_dir), flush=True)
+            print(flush=True)
+        if args.comma_audit_only:
+            raise SystemExit(1 if any_issue else 0)
+        if any_issue:
+            print(
+                "Aborting: comma audit found issue(s) in the raw export(s) above "
+                "(unquoted comma, malformed quote, and/or merged/data-loss row). Files are "
+                "left untouched — fix the raw invoice/check/image-metadata CSV(s) by hand "
+                "and re-run before generating the queue or lockbox report.",
+                flush=True,
+            )
+            raise SystemExit(3)
+
         inv, img = discover_invoice_and_images(run_dir)
         args.invoice_csv = inv
         args.image_dir = img
@@ -506,24 +1244,25 @@ def main() -> None:
     )
     merchant_lookup = merchant_lookup_merged(merchant_lookup_dirs)
     merchant_aliases = load_merchant_aliases(merchant_lookup_dirs)
+    all_merchants = sorted({v.strip() for v in merchant_lookup.values() if v.strip()})
 
-    # Every Paystand row with missing invoice is emitted (same Transaction Id may appear on multiple rows).
+    # Every Paystand invoice-detail row is emitted (same Transaction Id may appear on multiple
+    # rows — multi-invoice checks, or a mix of invoice-0 and invoiced lines for the same check).
     queue_rows: list[tuple[dict, Path, str]] = []
-    with args.invoice_csv.open(newline="", encoding="utf-8", errors="replace") as f:
-        reader = csv.DictReader(f)
-        required = {"Transaction Id", "Invoice Number", "Check Amount", "Mail Stop"}
-        if not required.issubset(reader.fieldnames or []):
+    invoice_rows = load_invoice_export_rows(args.invoice_csv)
+    required = {"Transaction Id", "Invoice Number", "Check Amount", "Mail Stop"}
+    if invoice_rows:
+        sample = invoice_rows[0]
+        if not required.issubset(sample.keys()):
             raise SystemExit(f"Missing CSV columns. Required: {required}")
 
-        for row in reader:
-            if not is_missing_invoice(row.get("Invoice Number", "")):
-                continue
-            tid = (row.get("Transaction Id") or "").strip()
-            if not tid:
-                continue
-            tif = args.image_dir / f"{tid}.tif"
-            ms = (row.get("Mail Stop") or "").strip()
-            queue_rows.append((row, tif, ms))
+    for row in invoice_rows:
+        tid = (row.get("Transaction Id") or "").strip()
+        if not tid:
+            continue
+        tif = args.image_dir / f"{tid}.tif"
+        ms = (row.get("Mail Stop") or "").strip()
+        queue_rows.append((row, tif, ms))
 
     rows_out: list[dict] = []
     nq = len(queue_rows)
@@ -531,15 +1270,27 @@ def main() -> None:
         if not args.quiet:
             tid = (row.get("Transaction Id") or "").strip()
             print(f"  OCR {i}/{nq} Transaction ID {tid} …", flush=True)
-        rows_out.append(
-            build_record(
-                row,
-                tif,
-                with_pages=not args.no_tif_pages,
-                merchant_payee=merchant_lookup.get(ms, ""),
-                merchant_aliases=merchant_aliases,
+        if is_missing_invoice(row.get("Invoice Number", "")):
+            rows_out.append(
+                build_record(
+                    row,
+                    tif,
+                    with_pages=not args.no_tif_pages,
+                    merchant_payee=merchant_lookup.get(ms, ""),
+                    merchant_aliases=merchant_aliases,
+                )
             )
-        )
+        else:
+            rows_out.append(
+                build_misroute_record(
+                    row,
+                    tif,
+                    with_pages=not args.no_tif_pages,
+                    merchant_payee=merchant_lookup.get(ms, ""),
+                    all_merchants=all_merchants,
+                    merchant_aliases=merchant_aliases,
+                )
+            )
 
     out_fields = [
         "Mail Stop",
@@ -548,6 +1299,7 @@ def main() -> None:
         "Check Amount",
         "Transaction ID",
         "Invoice Number",
+        "Scan Type",
         "Payer",
         "Needs Human?",
         "Reason",
@@ -587,13 +1339,29 @@ def main() -> None:
         if missing and not args.quiet:
             print(f"Warning: {missing} transaction(s) with no .tif at the expected path.")
         mp = sum(1 for r in rows_out if row_is_multipage_by_page_count(r))
-        nh = sum(1 for r in rows_out if r.get("Needs Human?") == "yes")
+        nh_no_invoice = sum(
+            1
+            for r in rows_out
+            if r.get("Needs Human?") == "yes" and r.get("Scan Type") == "No Invoice"
+        )
+        nh_invoiced = sum(
+            1
+            for r in rows_out
+            if r.get("Needs Human?") == "yes" and r.get("Scan Type") == "Invoice On File"
+        )
+        not_a_check = sum(1 for r in rows_out if (r.get("Reason") or "").startswith("Not a check"))
+        not_a_check_note = f"; {not_a_check} not-a-check TIF(s) auto-cleared" if not_a_check else ""
         if not args.quiet:
             if not args.no_tif_pages:
-                print(f"Summary: {nh} need human review; {mp} multi-page TIF(s).")
+                print(
+                    f"Summary: {nh_no_invoice} need human review (no invoice); "
+                    f"{nh_invoiced} possible misroute(s) (invoice on file); {mp} multi-page TIF(s)"
+                    f"{not_a_check_note}."
+                )
             else:
                 print(
-                    f"Summary: {nh} need human review. "
+                    f"Summary: {nh_no_invoice} need human review (no invoice); "
+                    f"{nh_invoiced} possible misroute(s) (invoice on file){not_a_check_note}. "
                     f"(TIF page count skipped; omit --no-tif-pages to read pages.)"
                 )
 
