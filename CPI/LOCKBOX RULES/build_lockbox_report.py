@@ -259,8 +259,8 @@ def main() -> None:
         print(flush=True)
         raise SystemExit(
             "Aborting: comma audit found issue(s) in the raw export(s) above. Files are "
-            "left untouched — fix the raw invoice/check/image-metadata CSV(s) by hand and "
-            "re-run before generating the lockbox report."
+            "left untouched — fix the working invoice/check/image-metadata CSV(s) by hand "
+            "(do not edit OG_* originals) and re-run before generating the lockbox report."
         )
     if args.invoice_csv is None:
         invoice_csv, _ = discover_invoice_and_images(run_dir)

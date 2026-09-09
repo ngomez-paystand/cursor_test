@@ -20,8 +20,8 @@ Scripts, mail-stop/alias tables, and the four lockbox Cursor rules (same filenam
 
 ## Setup (teammate)
 
-1. Get access to this private repo (`ngomez-paystand/cursor_test`).
-2. Clone it and open that folder in Cursor.
+1. Clone this public repo (`ngomez-paystand/cursor_test`).
+2. Open that folder in Cursor.
 3. From `CPI/`:
 
 ```bash

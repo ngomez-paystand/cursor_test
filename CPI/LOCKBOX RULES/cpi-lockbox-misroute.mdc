@@ -14,7 +14,7 @@ En el resumen del día: **MAL RUTEO** arriba de todo (negritas/mayúsculas). Tra
 
 ## 2. Metadata de los tres archivos fuente
 
-Invoice, check y `metadata.csv` del image (todas las filas de esa Transaction ID, no solo una). **De momento el usuario lo corrige a mano.** No editar invoice/check/metadata ni el zip. Confirmar después de su corrección. Pronto el agente lo hará y el usuario supervisará.
+Invoice, check y `metadata.csv` del image (todas las filas de esa Transaction ID, no solo una). **De momento el usuario lo corrige a mano** en los archivos de trabajo (`Paystand_*.csv` / `metadata.csv`). **No editar `OG_*`.** No editar el zip. Confirmar después de su corrección. Pronto el agente lo hará y el usuario supervisará.
 
 ## 3. Redactar el correo (no enviar salvo que lo pida)
 

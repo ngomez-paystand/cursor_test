@@ -31,6 +31,14 @@ Corre el audit por separado antes de reportar al usuario:
 python3 "LOCKBOX RULES/audit_paystand_commas.py" --run-dir <MES>/<MM-DD-YYYY> --no-fix
 ```
 
+## Originales `OG_`
+
+Al primer audit/OCR/lockbox de un día, se copian invoice, check y `metadata.csv` a
+`OG_<mismo nombre>` (invoice/check en la carpeta del día; `OG_metadata.csv` en la carpeta de
+imágenes). Esas copias **no se editan nunca**. Si hay que corregir comillas o un mal ruteo, se
+editan solo los archivos de trabajo (`Paystand_*.csv` / `metadata.csv`). El pipeline ignora
+cualquier CSV que empiece con `OG_`.
+
 ## Regla general
 
 El audit corre automáticamente al inicio de ambos scripts (no hace falta un paso extra), pero

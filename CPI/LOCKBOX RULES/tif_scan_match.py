@@ -1235,6 +1235,20 @@ _NON_CHECK_DOCUMENT_PATTERNS: list[tuple[re.Pattern, str]] = [
     ),
     (
         re.compile(
+            r"DIRECT\s+DEPOSIT\s+ADVICE|\bNOT\s+A\s+CHECK\b",
+            re.IGNORECASE,
+        ),
+        "direct deposit advice (not a physical check)",
+    ),
+    (
+        re.compile(
+            r"\bIn\s+Administration\b|\bInsolvency\b|\bjoint\s+administrators\b",
+            re.IGNORECASE,
+        ),
+        "insolvency / administration notice letter",
+    ),
+    (
+        re.compile(
             r"\bUS\s+POSTAGE\b|\bFIRST-CLASS\s+MAIL\b|\bPITNEY\s+BOWES\b|\bQUADIENT\b",
             re.IGNORECASE,
         ),

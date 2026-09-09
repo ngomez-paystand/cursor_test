@@ -18,7 +18,9 @@ CPI/MAY/
 CPI/JUNE/
 CPI/JULY/
 CPI/AUGUST/
+CPI/SEPTEMBER/
 CPI/**/Paystand_*
+CPI/**/OG_*
 CPI/**/tif_*.csv
 CPI/**/verification_previews/
 CPI/**/*.tif

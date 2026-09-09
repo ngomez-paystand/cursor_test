@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import csv
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Union
@@ -331,8 +332,43 @@ def _payer_comma_category(payer: str) -> str:
     return "other"
 
 
+_OG_PREFIX = "OG_"
+
+
+def _is_og_original(path: Path) -> bool:
+    return path.name.startswith(_OG_PREFIX)
+
+
+def _working_csvs(paths: list[Path]) -> list[Path]:
+    return [p for p in paths if not _is_og_original(p)]
+
+
+def og_snapshot_path(src: Path) -> Path:
+    return src.with_name(f"{_OG_PREFIX}{src.name}")
+
+
+def snapshot_original_exports(run_dir: Path) -> list[Path]:
+    """Copy working invoice/check/metadata to OG_<filename> once. Never overwrite OG_ files."""
+    created: list[Path] = []
+    invoice_csv, image_dir = discover_invoice_and_images(run_dir)
+    sources = [invoice_csv]
+    check_csv = discover_check_csv(run_dir)
+    if check_csv:
+        sources.append(check_csv)
+    meta_csv = discover_image_metadata_csv(image_dir)
+    if meta_csv:
+        sources.append(meta_csv)
+    for src in sources:
+        dest = og_snapshot_path(src)
+        if dest.exists() or not src.is_file():
+            continue
+        shutil.copy2(src, dest)
+        created.append(dest)
+    return created
+
+
 def discover_check_csv(run_dir: Path) -> Path | None:
-    cs = sorted(run_dir.glob("*Check*Detail*.csv"), key=lambda p: p.name)
+    cs = _working_csvs(sorted(run_dir.glob("*Check*Detail*.csv"), key=lambda p: p.name))
     if not cs:
         return None
     pay = [p for p in cs if "Paystand" in p.name]
@@ -516,6 +552,13 @@ def ensure_run_dir_exports_commas_clean(
         "check": (_PAYSTAND_CHECK_HEAD_COLS, _PAYSTAND_CHECK_TAIL_COLS),
         "image metadata": (_PAYSTAND_IMAGE_META_HEAD_COLS, _PAYSTAND_IMAGE_META_TAIL_COLS),
     }
+    created_og = snapshot_original_exports(run_dir)
+    if created_og:
+        print("Originals saved (OG_ copies, never edited):", flush=True)
+        for p in created_og:
+            print(f"  {p.name}", flush=True)
+        print(flush=True)
+
     initial = audit_run_dir_exports(run_dir)
     fixed_by_label: dict[str, int] = {}
     if auto_fix:
@@ -666,11 +709,11 @@ def discover_invoice_and_images(run_dir: Path) -> tuple[Path, Path]:
     """
     if not run_dir.is_dir():
         raise FileNotFoundError(str(run_dir))
-    cs = sorted(run_dir.glob("*Invoice*Detail*.csv"), key=lambda p: p.name)
+    cs = _working_csvs(sorted(run_dir.glob("*Invoice*Detail*.csv"), key=lambda p: p.name))
     if not cs:
         raise FileNotFoundError(f"No *Invoice*Detail*.csv found under {run_dir}")
     if len(cs) > 1:
-        # If several, prefer a filename containing "Paystand"
+        # If several, prefer a filename containing "Paystand" (never OG_ copies)
         pay = [p for p in cs if "Paystand" in p.name]
         invoice_csv = pay[0] if pay else cs[0]
     else:
@@ -1209,8 +1252,8 @@ def main() -> None:
             print(
                 "Aborting: comma audit found issue(s) in the raw export(s) above "
                 "(unquoted comma, malformed quote, and/or merged/data-loss row). Files are "
-                "left untouched — fix the raw invoice/check/image-metadata CSV(s) by hand "
-                "and re-run before generating the queue or lockbox report.",
+                "left untouched — fix the working invoice/check/image-metadata CSV(s) by hand "
+                "(do not edit OG_* originals) and re-run before generating the queue or lockbox report.",
                 flush=True,
             )
             raise SystemExit(3)
