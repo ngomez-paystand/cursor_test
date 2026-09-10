@@ -6,17 +6,17 @@ Daily Paystand folders (`CPI/AUGUST/08-26-2026/`, etc.) stay local and are not i
 
 ## What is in `CPI/LOCKBOX RULES/`
 
-Scripts, mail-stop/alias tables, and the four lockbox Cursor rules (same filenames). Cursor still loads those rules via symlinks in `.cursor/rules/`.
+Scripts, mail-stop/alias tables, and the lockbox Cursor rules (same filenames). Cursor still loads those rules via symlinks in `.cursor/rules/`.
 
 | File | Purpose |
 |------|---------|
-| `queue_tif_review.py` | Comma audit + OCR queue → `tif_review_queue.csv` |
-| `build_lockbox_report.py` | Lockbox Excel (`Good?`) from the queue |
+| `queue_tif_review.py` | Comma audit + OCR queue → `tif_review_queue.csv` + `.xlsx` |
+| `build_lockbox_report.py` | Lockbox Excel (`Good?` + ops checklist O2:P12) from the queue |
 | `audit_paystand_commas.py` | Comma audit only (does not rewrite exports) |
 | `tif_scan_match.py` | OCR match + “not a check” patterns |
 | `mail_stop_merchants.csv` | Mail Stop → merchant |
 | `merchant_aliases.csv` | Payee aliases on checks |
-| `cpi-lockbox-*.mdc` | Agent rules (audit, visual review, misroute, re-run confirm) |
+| `cpi-lockbox-*.mdc` | Agent rules (audit, visual review, misroute, re-run confirm, Excel outputs) |
 
 ## Setup (teammate)
 

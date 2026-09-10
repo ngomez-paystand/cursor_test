@@ -17,7 +17,7 @@ Muchos cambios (alias nuevos, mail stops nuevos) solo afectan a transacciones pu
 revisaron manualmente y se confirmaron como correctas. Volver a correr todo el OCR no siempre es
 necesario para reflejar el cambio en el reporte — a veces basta con saber que la próxima corrida
 ya lo tomará en cuenta, o incluso alcanza con editar directamente el resultado de esa transacción
-puntual en `tif_review_queue.csv` / `lockbox_report.xlsx` sin re-escanear las demás.
+puntual en `tif_review_queue.csv` / `tif_review_queue.xlsx` / `lockbox_report.xlsx` sin re-escanear las demás.
 
 ## Qué hacer en su lugar
 

@@ -18,6 +18,20 @@ Invoice, check y `metadata.csv` del image (todas las filas de esa Transaction ID
 
 ## 3. Redactar el correo (no enviar salvo que lo pida)
 
-Plantilla (inglés, un párrafo; sustituir merchant/MS/TID/monto del caso):
+Plantilla en inglés. Sustituir merchant/MS/TID/monto del caso.
 
-Hi All, We had one check sent to the wrong mailstop today, please ensure the funds are sent to the right place. The check was incorrectly sent to Sharetru (MS 166), but should have been sent to Tripleseat Software (MS 160). Check Info: Transaction ID: 43473717 Check Amount: $250 Thank you,
+Nombres de customer: solo el nombre comercial. Quitar sufijos legales (`Inc.`, `LLC`, `Corp.`, `Ltd.`, `LLP`, `PLLC`, `Co.`, y similares). Ejemplo: `Oofos Inc.` → `Oofos`; `ProctorU Inc.` → `ProctorU`; `Tripleseat Software LLC` → `Tripleseat Software`.
+
+`Check Info:`, `Transaction ID:` y `Check Amount:` van cada uno en su propia fila, con un salto de línea entre ellos. Nunca en la misma línea ni en el mismo párrafo.
+
+```text
+Hi All, We had one check sent to the wrong mailstop today, please ensure the funds are sent to the right place. The check was incorrectly sent to Sharetru (MS 166), but should have been sent to Tripleseat Software (MS 160).
+
+Check Info:
+
+Transaction ID: 43473717
+
+Check Amount: $250
+
+Thank you,
+```

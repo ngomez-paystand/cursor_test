@@ -10,12 +10,13 @@ Cuando `queue_tif_review.py` deja `Needs Human? = yes`, **antes de reportar al u
 
 ## Escribir el resultado en los archivos
 
-No dejar las falsas alarmas marcadas en `tif_review_queue.csv` / `lockbox_report.xlsx`.
+No dejar las falsas alarmas marcadas en `tif_review_queue.csv` / `tif_review_queue.xlsx` / `lockbox_report.xlsx`.
 
 - **Falsa alarma** (cheque sí coincide):
   1. `python3 "LOCKBOX RULES/queue_tif_review.py" --run-dir <día> --visual-clear TID1,TID2`
      (no re-corre OCR; pone `Needs Human? = no`. Scan Notes conserva el texto del OCR y
      termina: `Additional visual review by LUCAS confirmed payee and amount on TIF.`).
+     El `--visual-clear` reescribe CSV y `tif_review_queue.xlsx` (colores Needs Human? incluidos).
   2. Regenerar `lockbox_report.xlsx` para que esas filas queden `Good? = y`.
 - **Mal ruteo** (el payee del cheque es otro merchant conocido, p. ej. CBUSA en un Mail Stop de Sharetru): dejar `Needs Human? = yes`. Es el hallazgo de más prioridad.
 - **Pendiente real** (otro payee/monto, no es cheque, alias nuevo, duda): dejar `Needs Human? = yes` y reportarlo.

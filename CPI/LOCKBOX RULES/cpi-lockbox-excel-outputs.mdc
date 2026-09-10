@@ -1,0 +1,45 @@
+---
+description: CPI/Lockbox — formato de tif_review_queue.xlsx y lockbox_report.xlsx (colores y checklist)
+globs: CPI/**
+alwaysApply: false
+---
+
+# Excel generado por el pipeline (no Google Sheets)
+
+El formato vive **solo** en los archivos que escriben los scripts en la carpeta del día.
+**No** aplicar estos colores ni el checklist a Google Sheets (p. ej. *Lockbox Merchant Check 5.0*).
+
+## `tif_review_queue.xlsx`
+
+`queue_tif_review.py` escribe el CSV **y** un `.xlsx` hermano (misma data).
+
+Formato condicional en **Needs Human?** (columna I en el queue diario, sin Fecha):
+
+- el texto contiene `no` → verde `#B7E1CD`
+- el texto **no** contiene `no` → rosa `#F4C7C3`
+
+Helper: `apply_needs_human_conditional_formatting()` / `write_dict_rows_xlsx()` en `cpi_xlsx.py`.
+`--visual-clear` también reescribe el `.xlsx`.
+
+## `lockbox_report.xlsx` — checklist ops O2:P12
+
+`build_lockbox_report.py` escribe 11 filas desde **O2** (etiqueta) / **P2** (`y` o vacío).
+La columna N queda vacía. Varias etiquetas llevan hipervínculo (Metabase / SFTP).
+
+| Celda | Etiqueta | P default |
+|-------|----------|-----------|
+| O2 | Missing checks good? | y |
+| O3 | CPI Reports Uploaded (Previous Day)? | y |
+| O4 | Checks Processed? | y |
+| O5 | SFTP Out Files Present? | y |
+| O6 | SFTP In Files Present? | y |
+| O7 | Previous day payment shows here? | y |
+| O8 | Quotation mark/commas issues good? | y |
+| O9 | Missing check number issues good? | (vacío) |
+| O10 | Low/0 automatch rates good? | (vacío) |
+| O11 | Checks to correct customers? | y |
+| O12 | Check amounts for unmatched checks correct? | y |
+
+**O2 y O9 siempre rosa `#F4C7C3`** (relleno fijo, no condicional). El resto del checklist sin color.
+
+Constantes: `OPS_CHECKLIST` y `write_ops_checklist()` en `build_lockbox_report.py`.

@@ -53,12 +53,27 @@ from pathlib import Path
 from typing import Union
 from urllib.parse import urlparse, unquote
 
+from cpi_xlsx import write_dict_rows_xlsx
 from tif_scan_match import (
     analyze_tif_against_csv,
     analyze_tif_for_misroute,
     builtin_merchant_aliases,
     detect_non_check_document,
 )
+
+
+def write_tif_review_queue(
+    csv_path: Path, fieldnames: list[str], rows: list[dict]
+) -> Path:
+    """Write tif_review_queue.csv and a sibling .xlsx with Needs Human? CF."""
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rows)
+    xlsx_path = csv_path.with_suffix(".xlsx")
+    write_dict_rows_xlsx(xlsx_path, fieldnames, rows, sheet_title="Queue")
+    return xlsx_path
 
 def tif_path_from_queue_cell(cell: str, image_dir: Path) -> Path:
     """
@@ -1151,10 +1166,7 @@ def apply_visual_review_clears(queue_csv: Path, transaction_ids: list[str]) -> t
             row["Scan Notes"] = notes
         cleared += 1
 
-    with queue_csv.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writeheader()
-        w.writerows(rows)
+    write_tif_review_queue(queue_csv, fieldnames, rows)
 
     missing = [t for t in transaction_ids if t.strip() and t.strip() not in found]
     return cleared, missing
@@ -1211,7 +1223,7 @@ def main() -> None:
         "--visual-clear",
         default="",
         help="Comma-separated Transaction IDs visually confirmed as false alarms. Updates "
-        "tif_review_queue.csv in place (Needs Human?=no); does not re-run OCR.",
+        "tif_review_queue.csv and .xlsx in place (Needs Human?=no); does not re-run OCR.",
     )
     args = ap.parse_args()
 
@@ -1225,6 +1237,7 @@ def main() -> None:
             raise SystemExit("--visual-clear requires --run-dir or --output (the queue CSV).")
         cleared, missing = apply_visual_review_clears(queue_csv, tids)
         print(f"Visual review: cleared {cleared} row(s) in {queue_csv}")
+        print(f"Wrote: {queue_csv.with_suffix('.xlsx')} (Needs Human? conditional formatting)")
         if missing:
             print(
                 "Warning: Transaction ID(s) not found in queue: " + ", ".join(missing),
@@ -1361,13 +1374,10 @@ def main() -> None:
     )
 
     if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        with args.output.open("w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=out_fields)
-            w.writeheader()
-            w.writerows(rows_out)
+        xlsx_path = write_tif_review_queue(args.output, out_fields, rows_out)
         if not args.quiet:
             print(f"Wrote: {args.output} ({len(rows_out)} rows)")
+            print(f"Wrote: {xlsx_path} (Needs Human? conditional formatting)")
     else:
         w = csv.DictWriter(__import__("sys").stdout, fieldnames=out_fields)
         w.writeheader()

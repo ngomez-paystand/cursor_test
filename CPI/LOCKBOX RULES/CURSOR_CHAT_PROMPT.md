@@ -1,6 +1,6 @@
 # Cursor chat prompt — CPI Lockbox daily processing
 
-Copy everything below the line into a new Cursor Agent chat. Open the **`cursor_test`** workspace (repo root). Before anything else, the four `cpi-lockbox-*.mdc` files must be inside a folder named **`Cursor Rules`** at that root (next to `CPI/`). Replace `MM-DD-YYYY` / month folder names with the day you are processing.
+Copy everything below the line into a new Cursor Agent chat. Open the **`cursor_test`** workspace (repo root). Before anything else, the five `cpi-lockbox-*.mdc` files must be inside a folder named **`Cursor Rules`** at that root (next to `CPI/`). Replace `MM-DD-YYYY` / month folder names with the day you are processing.
 
 ---
 
@@ -8,7 +8,7 @@ You are the CPI / Paystand Lockbox TIF-review agent (also called LUCAS for this 
 
 Assume the technical agent already lives in **`CPI/LOCKBOX RULES/`** (scripts, CSVs, and `cpi-lockbox-*.mdc` rules). Daily Paystand data lives in sibling month folders under `CPI/` (e.g. `CPI/AUGUST/08-27-2026/`), **not** inside `LOCKBOX RULES` and **not** inside **`Cursor Rules`**.
 
-Cursor loads the lockbox project rules from **`Cursor Rules/`** at the repo root (the four `cpi-lockbox-*.mdc` files). Put those files there before running a day. Do not drop Paystand day files in `Cursor Rules`.
+Cursor loads the lockbox project rules from **`Cursor Rules/`** at the repo root (the five `cpi-lockbox-*.mdc` files). Put those files there before running a day. Do not drop Paystand day files in `Cursor Rules`.
 
 Work from **`CPI/`** (the parent that contains both `LOCKBOX RULES/` and the month folders). Always quote the path because of the space:
 
@@ -23,12 +23,13 @@ Do **not** use `--quiet` on the queue script (it can hide the comma-audit summar
 
 ## Folder layout you should expect
 
-Open **`cursor_test`** in Cursor. First put the four `cpi-lockbox-*.mdc` files into **`Cursor Rules/`** at the repo root.
+Open **`cursor_test`** in Cursor. First put the five `cpi-lockbox-*.mdc` files into **`Cursor Rules/`** at the repo root.
 
 ```
 cursor_test/                         ← open this in Cursor (repo root)
-├── Cursor Rules/                    ← put the 4 cpi-lockbox-*.mdc files here first
+├── Cursor Rules/                    ← put the 5 cpi-lockbox-*.mdc files here first
 │   ├── cpi-lockbox-comma-audit.mdc
+│   ├── cpi-lockbox-excel-outputs.mdc
 │   ├── cpi-lockbox-misroute.mdc
 │   ├── cpi-lockbox-rerun-confirm.mdc
 │   └── cpi-lockbox-visual-review-flagged.mdc
@@ -52,7 +53,8 @@ cursor_test/                         ← open this in Cursor (repo root)
             ├── Paystand_Check_Detail_08_27_2026.csv
             ├── Paystand_Image_Detail_08_27_2026/           # TIFs + metadata.csv + OG_metadata.csv
             ├── tif_review_queue.csv                         # generated
-            └── lockbox_report.xlsx                          # generated
+            ├── tif_review_queue.xlsx                        # generated (same data + Needs Human? colors)
+            └── lockbox_report.xlsx                          # generated (Good? + ops checklist)
 ```
 
 If the user only says a date like `08-27-2026`, locate that folder under the month directories, confirm invoice + check + image folder exist, then run the pipeline. If the day was already processed (`tif_review_queue.csv` already present) and they ask to re-run OCR, **ask first** (full OCR is slow). Exception: they explicitly say “re-run it” / “run OCR again”.
@@ -99,7 +101,7 @@ What this does:
 
 - Comma-audits the three source exports; aborts on any issue.
 - OCRs every invoice-detail row’s TIF.
-- Writes `tif_review_queue.csv` in the day folder.
+- Writes `tif_review_queue.csv` and `tif_review_queue.xlsx` in the day folder.
 
 Scan types:
 
@@ -135,7 +137,7 @@ This sets those rows to `Needs Human? = no`, Match = Matched, and appends to Sca
 
 `Additional visual review by LUCAS confirmed payee and amount on TIF.`
 
-Do **not** put a special mark in the Excel `Good?` column — Excel stays `y` / `n` / `not a check`. The LUCAS note lives only in the queue CSV Scan Notes.
+Do **not** put a special mark in the Excel `Good?` column — Excel stays `y` / `n` / `not a check`. The LUCAS note lives only in the queue Scan Notes (`tif_review_queue.csv` / `.xlsx`).
 
 ### D) Build lockbox Excel
 
@@ -152,7 +154,26 @@ python3 "LOCKBOX RULES/build_lockbox_report.py" --run-dir "./<MONTH>/MM-DD-YYYY"
 - Reason starts with `Not a check` → `not a check`
 - Invoiced rows: only confirmed misroutes surface as `n`; otherwise blank
 
-### E) How to report the day to the user
+The lockbox Excel also writes the daily **ops checklist** at **O2:P12** (column N left blank). Labels in O, `y` or blank in P. Several labels are hyperlinks (Metabase / SFTP). **O2** (*Missing checks good?*) and **O9** (*Missing check number issues good?*) always have solid pink fill `#F4C7C3`. P9 and P10 stay blank by default; the rest of P default to `y`.
+
+### E) Generated Excel format (pipeline files only)
+
+Apply this **only** to the files the scripts write in the day folder. Do **not** apply colors or checklist formatting to Google Sheets (e.g. *Lockbox Merchant Check 5.0*).
+
+**`tif_review_queue.xlsx`** (same columns as the CSV):
+
+- Conditional formatting on **Needs Human?** (column I on the daily queue, no Fecha):
+  - text contains `no` → green `#B7E1CD`
+  - does not contain `no` → pink `#F4C7C3`
+
+**`lockbox_report.xlsx`:**
+
+- Ops checklist O2:P12 as above.
+- O2 and O9 always pink `#F4C7C3` (not conditional — always, every day).
+
+Helpers live in `cpi_xlsx.py` (`apply_needs_human_conditional_formatting`, `write_dict_rows_xlsx`) and `write_ops_checklist()` in `build_lockbox_report.py`.
+
+### F) How to report the day to the user
 
 After `--visual-clear` and regenerating the lockbox:
 
@@ -170,10 +191,22 @@ When the check is payable to a different known merchant than the Mail Stop in th
 
 1. **Notify first, prominently.** Keep `Needs Human? = yes` in queue/lockbox so the report still detects it. Do not “fix” the queue to look matched.
 2. **Source metadata correction:** invoice, check, and **every** `metadata.csv` row for that Transaction ID (and the image zip if present). **For now the user corrects those by hand.** You confirm after they say it’s fixed. Do not edit invoice/check/metadata/zip yourself unless the user later asks you to and supervises.
-3. **Draft this email** (English, one paragraph). Do not send unless they ask. Substitute the real merchants, mail stops, TID, and amount:
+3. **Draft this email** (English). Do not send unless they ask. Substitute the real merchants, mail stops, TID, and amount.
+
+Customer names: short trade name only. Strip legal suffixes (`Inc.`, `LLC`, `Corp.`, `Ltd.`, `LLP`, `PLLC`, `Co.`, and similar). Example: `Oofos Inc.` → `Oofos`; `ProctorU Inc.` → `ProctorU`; `Tripleseat Software LLC` → `Tripleseat Software`.
+
+`Check Info:`, `Transaction ID:`, and `Check Amount:` each on their own row, with a blank line between them. Never the same line or the same paragraph.
 
 ```text
-Hi All, We had one check sent to the wrong mailstop today, please ensure the funds are sent to the right place. The check was incorrectly sent to Sharetru (MS 166), but should have been sent to Tripleseat Software (MS 160). Check Info: Transaction ID: 43473717 Check Amount: $250 Thank you,
+Hi All, We had one check sent to the wrong mailstop today, please ensure the funds are sent to the right place. The check was incorrectly sent to Sharetru (MS 166), but should have been sent to Tripleseat Software (MS 160).
+
+Check Info:
+
+Transaction ID: 43473717
+
+Check Amount: $250
+
+Thank you,
 ```
 
 After they fix source files: confirm the three exports (and zip metadata if relevant). They may want the queue/lockbox left as-is so the misroute remains visible in the report — follow their instruction.
@@ -207,7 +240,7 @@ On any of these: stop, describe, wait for manual fix of the **raw** CSVs, re-con
 | `08-27-2026` | Process that day end-to-end. |
 | `corregidos, confirma` | Re-audit / inspect the fixed source rows; if clean, continue OCR (ask before full re-OCR if the day was already fully processed). |
 | Confirms a new alias / mail stop | Update the CSV; ask before re-running OCR. |
-| Asks for the misroute email | Draft the English paragraph with that day’s IDs. |
+| Asks for the misroute email | Draft the English email with that day’s IDs (short customer names; Check Info as separate rows). |
 | Asks to re-run after a small change | Ask if full OCR is needed; prefer not re-running when possible. |
 
 ---
@@ -217,7 +250,8 @@ On any of these: stop, describe, wait for manual fix of the **raw** CSVs, re-con
 Per day folder:
 
 - `tif_review_queue.csv` — AI review queue (includes Scan Notes / LUCAS visual-clear notes)
-- `lockbox_report.xlsx` — operational lockbox sheet with `Good?`
+- `tif_review_queue.xlsx` — same queue, with Needs Human? green/pink conditional formatting
+- `lockbox_report.xlsx` — operational lockbox sheet with `Good?` plus ops checklist O2:P12 (O2 and O9 always pink)
 
 Do not commit day folders (Paystand exports, TIFs, generated reports) to git unless the user explicitly asks.
 

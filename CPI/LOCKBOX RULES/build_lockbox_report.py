@@ -56,6 +56,46 @@ OUTPUT_COLUMNS = [
     "Apply Amount",
 ]
 
+# Ops checklist at O2:P12 (column N left blank). URL filled when provided.
+# (label, default y/n or "", hyperlink or "")
+OPS_CHECKLIST: list[tuple[str, str, str]] = [
+    (
+        "Missing checks good?",
+        "y",
+        "https://bi.paystand.us/question/1934-missing-checks",
+    ),
+    (
+        "CPI Reports Uploaded (Previous Day)?",
+        "y",
+        "https://bi.paystand.us/question/1744-cpi-reports",
+    ),
+    (
+        "Checks Processed?",
+        "y",
+        "https://bi.paystand.us/question/1648-checks-in-processing",
+    ),
+    (
+        "SFTP Out Files Present?",
+        "y",
+        "https://sftp.afts.com/files/_Sacramento/CLIENT_FTP/paystand/Out?sortColumn=modified_at_datetime&sortDirection=desc",
+    ),
+    (
+        "SFTP In Files Present?",
+        "y",
+        "https://sftp.afts.com/files/_Sacramento/CLIENT_FTP/paystand/IN/Archive?sortColumn=modified_at_datetime&sortDirection=desc",
+    ),
+    (
+        "Previous day payment shows here?",
+        "y",
+        "https://bi.paystand.us/question/2236-check-transaction-id-to-find-info",
+    ),
+    ("Quotation mark/commas issues good?", "y", ""),
+    ("Missing check number issues good?", "", ""),
+    ("Low/0 automatch rates good?", "", ""),
+    ("Checks to correct customers?", "y", ""),
+    ("Check amounts for unmatched checks correct?", "y", ""),
+]
+
 
 def _good_from_needs_human(needs_human: str, reason: str) -> str:
     if (reason or "").strip().lower().startswith("not a check"):
@@ -194,6 +234,29 @@ def _cell_value(col: str, val: str):
     return val
 
 
+def write_ops_checklist(ws) -> None:
+    """Write the daily ops checklist starting at O2 (labels) / P2 (y/n)."""
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    label_col = 15  # O
+    value_col = 16  # P
+    ws.column_dimensions[get_column_letter(label_col)].width = 48
+    ws.column_dimensions[get_column_letter(value_col)].width = 6
+    link_font = Font(name="Arial", size=10, color="0563C1", underline="single")
+    always_red = PatternFill(start_color="F4C7C3", end_color="F4C7C3", fill_type="solid")
+    for i, (label, value, url) in enumerate(OPS_CHECKLIST):
+        row = 2 + i
+        cell = ws.cell(row, label_col, label)
+        cell.alignment = Alignment(wrap_text=True)
+        if url:
+            cell.hyperlink = url
+            cell.font = link_font
+        if row in (2, 9):
+            cell.fill = always_red
+        ws.cell(row, value_col, value or None)
+
+
 def write_xlsx(rows: list[dict[str, str]], path: Path) -> None:
     try:
         import openpyxl
@@ -210,6 +273,7 @@ def write_xlsx(rows: list[dict[str, str]], path: Path) -> None:
     for r, row in enumerate(rows, start=2):
         for c, col in enumerate(OUTPUT_COLUMNS, start=1):
             ws.cell(r, c, _cell_value(col, (row.get(col) or "").strip()))
+    write_ops_checklist(ws)
     path.parent.mkdir(parents=True, exist_ok=True)
     save_workbook(wb, path, show_grid_lines=False, cell_borders=False)
 
