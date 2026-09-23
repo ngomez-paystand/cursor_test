@@ -47,12 +47,14 @@ cursor_test/                         ← open this in Cursor (repo root)
     │   └── cpi-lockbox-*.mdc
     └── AUGUST/                      ← month folder (JULY/, SEPTEMBER/, etc.)
         └── 08-27-2026/              ← day folder, name = MM-DD-YYYY
-            ├── OG_Paystand_Invoice_Detail_08_27_2026.csv   # original invoice, never edit
+            ├── OG_Paystand_Invoice_Detail_08_27_2026.csv   # original, never edit
+            ├── OG_Paystand_Check_Detail_08_27_2026.csv
             ├── Paystand_Invoice_Detail_08_27_2026.csv      # working copy
             ├── Paystand_Check_Detail_08_27_2026.csv
-            ├── Paystand_Image_Detail_08_27_2026/           # TIFs + metadata.csv
+            ├── Paystand_Image_Detail_08_27_2026/           # TIFs + metadata.csv + OG_metadata.csv
             ├── tif_review_queue.xlsx                        # generated (Needs Human? colors)
-            └── lockbox_report.xlsx                          # generated (Good? + ops checklist)
+            ├── lockbox_report.xlsx                          # generated (Good? + ops checklist)
+            └── verification_previews/                       # PNG pages of each TIF (keep)
 ```
 
 If the user only says a date like `08-27-2026`, locate that folder under the month directories, confirm invoice + check + image folder exist, then run the pipeline. If the day was already processed (`tif_review_queue.xlsx` already present) and they ask to re-run OCR, **ask first** (full OCR is slow). Exception: they explicitly say “re-run it” / “run OCR again”.
@@ -99,8 +101,10 @@ python3 "LOCKBOX RULES/queue_tif_review.py" --run-dir "./<MONTH>/MM-DD-YYYY"
 What this does:
 
 - Comma-audits the three source exports; aborts on any issue.
+- Snapshots invoice, check, and image `metadata.csv` to `OG_*` once (never overwritten).
 - OCRs every invoice-detail row’s TIF.
 - Writes `tif_review_queue.xlsx` in the day folder (no CSV).
+- Writes `verification_previews/<Transaction ID>/page_XX.png` for every unique TIF (keep this folder).
 
 Scan types:
 
@@ -114,7 +118,7 @@ Also auto-clears some **not a check** docs when CSV check amount is missing and 
 Before reporting flags to the user as-is:
 
 1. List all queue rows with `Needs Human? = yes`.
-2. Open each corresponding `.tif` (render pages to PNG and read them).
+2. Open the PNGs already in `verification_previews/<Transaction ID>/` (do not delete that folder).
 3. Compare payee and amount on the image vs CSV merchant / check amount.
 
 Classify each flagged row:
@@ -250,6 +254,7 @@ Per day folder:
 
 - `tif_review_queue.xlsx` — AI review queue (Scan Notes / LUCAS visual-clear notes + Needs Human? colors)
 - `lockbox_report.xlsx` — operational lockbox sheet with `Good?` plus ops checklist O2:P12 (O2 and O9 always pink)
+- `verification_previews/` — PNG pages of each TIF (daily flow; do not delete)
 
 Do not commit day folders (Paystand exports, TIFs, generated reports) to git unless the user explicitly asks.
 

@@ -10,7 +10,7 @@ Scripts, mail-stop/alias tables, and the lockbox Cursor rules (same filenames). 
 
 | File | Purpose |
 |------|---------|
-| `queue_tif_review.py` | Comma audit + OCR queue → `tif_review_queue.xlsx` |
+| `queue_tif_review.py` | Comma audit + OCR queue → `tif_review_queue.xlsx` + `verification_previews/` |
 | `build_lockbox_report.py` | Lockbox Excel (`Good?` + ops checklist O2:P12) from the queue |
 | `audit_paystand_commas.py` | Comma audit only (does not rewrite exports) |
 | `tif_scan_match.py` | OCR match + “not a check” patterns |

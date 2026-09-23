@@ -6,7 +6,7 @@ alwaysApply: false
 
 # Revisión visual — parte del flujo, no solo del chat
 
-Cuando `queue_tif_review.py` deja `Needs Human? = yes`, **antes de reportar al usuario**, abrir el TIF (páginas a PNG) y confirmar a ojo payee y monto vs CSV.
+Cuando `queue_tif_review.py` deja `Needs Human? = yes`, **antes de reportar al usuario**, abrir los PNG en `verification_previews/<Transaction ID>/` (el queue los genera siempre; **no borrar** esa carpeta) y confirmar a ojo payee y monto vs CSV.
 
 ## Escribir el resultado en los archivos
 

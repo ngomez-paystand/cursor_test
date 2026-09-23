@@ -19,8 +19,9 @@ Output rows are sorted by Mail Stop (A-Z), then Invoice Number, then Transaction
 Merchant (payee) is resolved by Mail Stop via mail_stop_merchants.csv in CPI/LOCKBOX RULES/ (embedded table is fallback only).
 (under --run-dir, invoice folder, or script folder) can override entries (columns: Mail Stop, Merchant).
 
-Page frames are read from each TIF for TIF Page Count and Needs Human. Use export_verification_previews.py
-to rasterize every page to PNG under verification_previews/<Transaction Id>/.
+Page frames are read from each TIF for TIF Page Count and Needs Human. After the queue xlsx,
+every unique TIF is rasterized to PNG under verification_previews/<Transaction Id>/ (part of
+the daily flow; do not delete).
 
 Needs Human? is yes when Merchant Match or Amount Match is not Matched, or TIF/export/page rules fail.
 Poor Scan (low OCR confidence) alone does not set Needs Human? when both matches are Matched.
@@ -91,6 +92,42 @@ def tif_path_from_queue_cell(cell: str, image_dir: Path) -> Path:
     if raw.startswith("file:"):
         return Path(unquote(urlparse(raw).path or ""))
     return image_dir / Path(raw).name
+
+
+def write_verification_previews(
+    run_dir: Path,
+    image_dir: Path,
+    rows: list[dict],
+    max_pages: int | None = None,
+) -> Path:
+    """Rasterize each unique TIF in the queue to PNG under verification_previews/."""
+    from PIL import Image
+
+    base_out = run_dir / "verification_previews"
+    if base_out.exists():
+        shutil.rmtree(base_out)
+    base_out.mkdir(parents=True, exist_ok=True)
+    seen: set[str] = set()
+    count = 0
+    for row in rows:
+        tid = (row.get("Transaction ID") or "").strip()
+        if not tid or tid in seen:
+            continue
+        tif = tif_path_from_queue_cell(row.get("TIF Path") or "", image_dir)
+        if not tif.is_file():
+            continue
+        seen.add(tid)
+        out_dir = base_out / tid
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with Image.open(tif) as im:
+            n = int(getattr(im, "n_frames", 1))
+            limit = n if max_pages is None else min(max_pages, n)
+            for i in range(limit):
+                im.seek(i)
+                rgb = im.convert("RGB")
+                rgb.save(out_dir / f"page_{i + 1:02d}.png", "PNG")
+        count += 1
+    return base_out
 
 # Mail Stop -> merchant legal name (payee receiving funds). Optional CSV overrides these values.
 _MAIL_STOP_MERCHANT_LINES = """
@@ -366,17 +403,26 @@ def og_snapshot_path(src: Path) -> Path:
 
 
 def snapshot_original_exports(run_dir: Path) -> list[Path]:
-    """Copy working invoice CSV to OG_<filename> once. Never overwrite OG_ files.
+    """Copy working invoice, check, and image metadata to OG_<filename> once.
 
-    Check and image metadata are still audited, but only the invoice OG_ is kept.
+    Never overwrite existing OG_ files. Image metadata lives in the image folder as
+    OG_metadata.csv (working file stays metadata.csv).
     """
     created: list[Path] = []
-    invoice_csv, _image_dir = discover_invoice_and_images(run_dir)
-    dest = og_snapshot_path(invoice_csv)
-    if dest.exists() or not invoice_csv.is_file():
-        return created
-    shutil.copy2(invoice_csv, dest)
-    created.append(dest)
+    invoice_csv, image_dir = discover_invoice_and_images(run_dir)
+    sources = [invoice_csv]
+    check_csv = discover_check_csv(run_dir)
+    if check_csv:
+        sources.append(check_csv)
+    meta_csv = discover_image_metadata_csv(image_dir)
+    if meta_csv:
+        sources.append(meta_csv)
+    for src in sources:
+        dest = og_snapshot_path(src)
+        if dest.exists() or not src.is_file():
+            continue
+        shutil.copy2(src, dest)
+        created.append(dest)
     return created
 
 
@@ -1377,6 +1423,9 @@ def main() -> None:
         xlsx_path = write_tif_review_queue(args.output, out_fields, rows_out)
         if not args.quiet:
             print(f"Wrote: {xlsx_path} ({len(rows_out)} rows, Needs Human? conditional formatting)")
+        previews = write_verification_previews(xlsx_path.parent, args.image_dir, rows_out)
+        if not args.quiet:
+            print(f"Wrote: {previews} (PNG pages per TIF)")
     else:
         w = csv.DictWriter(__import__("sys").stdout, fieldnames=out_fields)
         w.writeheader()
