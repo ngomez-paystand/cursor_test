@@ -77,7 +77,8 @@ OCR engines: Tesseract if available, else Apple Vision on macOS.
 4. **Do not leave OCR false alarms as `Needs Human? = yes` in the final deliverables.** After visual review, clear confirmed false alarms with `--visual-clear`, then rebuild the lockbox Excel.
 5. **Misroutes stay flagged.** The point of the report is to catch them. Do not “fix” the queue to look clean after a misroute.
 6. **Ask before re-running full OCR** on a day that was already processed, unless the user explicitly requests a re-run.
-7. Prefer short, direct status updates to the user. Lead with what matters (misroutes first).
+7. **Whenever a working file is corrected** (quotes, commas, misroute, anything), remind the user at the end of the report to **upload the corrected files to the SFTP platform**. Reminder only — never upload anything.
+8. Prefer short, direct status updates to the user. Lead with what matters (misroutes first).
 
 ---
 

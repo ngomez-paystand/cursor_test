@@ -39,6 +39,12 @@ imágenes). Esas copias **no se editan nunca**. Si hay que corregir comillas o u
 editan solo los archivos de trabajo (`Paystand_*.csv` / `metadata.csv`). El pipeline ignora
 cualquier CSV que empiece con `OG_`.
 
+## Recordatorio SFTP
+
+Cada vez que se corrija un archivo de trabajo del día (comillas, comas, mal ruteo, lo que sea),
+recordarle al usuario al final del reporte: **subir los archivos corregidos a la plataforma
+SFTP**. Es solo el recordatorio — el agente no sube nada.
+
 ## Regla general
 
 El audit corre automáticamente al inicio de ambos scripts (no hace falta un paso extra), pero
