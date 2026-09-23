@@ -53,7 +53,11 @@ from pathlib import Path
 from typing import Union
 from urllib.parse import urlparse, unquote
 
-from cpi_xlsx import write_dict_rows_xlsx
+from cpi_xlsx import (
+    load_queue_rows,
+    resolve_tif_review_queue,
+    write_dict_rows_xlsx,
+)
 from tif_scan_match import (
     analyze_tif_against_csv,
     analyze_tif_for_misroute,
@@ -65,14 +69,13 @@ from tif_scan_match import (
 def write_tif_review_queue(
     csv_path: Path, fieldnames: list[str], rows: list[dict]
 ) -> Path:
-    """Write tif_review_queue.csv and a sibling .xlsx with Needs Human? CF."""
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    with csv_path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writeheader()
-        w.writerows(rows)
-    xlsx_path = csv_path.with_suffix(".xlsx")
+    """Write tif_review_queue.xlsx with Needs Human? CF. Do not emit a CSV sibling."""
+    xlsx_path = csv_path if csv_path.suffix.lower() == ".xlsx" else csv_path.with_suffix(".xlsx")
+    xlsx_path.parent.mkdir(parents=True, exist_ok=True)
     write_dict_rows_xlsx(xlsx_path, fieldnames, rows, sheet_title="Queue")
+    csv_sibling = xlsx_path.with_suffix(".csv")
+    if csv_sibling.is_file():
+        csv_sibling.unlink()
     return xlsx_path
 
 def tif_path_from_queue_cell(cell: str, image_dir: Path) -> Path:
@@ -363,22 +366,17 @@ def og_snapshot_path(src: Path) -> Path:
 
 
 def snapshot_original_exports(run_dir: Path) -> list[Path]:
-    """Copy working invoice/check/metadata to OG_<filename> once. Never overwrite OG_ files."""
+    """Copy working invoice CSV to OG_<filename> once. Never overwrite OG_ files.
+
+    Check and image metadata are still audited, but only the invoice OG_ is kept.
+    """
     created: list[Path] = []
-    invoice_csv, image_dir = discover_invoice_and_images(run_dir)
-    sources = [invoice_csv]
-    check_csv = discover_check_csv(run_dir)
-    if check_csv:
-        sources.append(check_csv)
-    meta_csv = discover_image_metadata_csv(image_dir)
-    if meta_csv:
-        sources.append(meta_csv)
-    for src in sources:
-        dest = og_snapshot_path(src)
-        if dest.exists() or not src.is_file():
-            continue
-        shutil.copy2(src, dest)
-        created.append(dest)
+    invoice_csv, _image_dir = discover_invoice_and_images(run_dir)
+    dest = og_snapshot_path(invoice_csv)
+    if dest.exists() or not invoice_csv.is_file():
+        return created
+    shutil.copy2(invoice_csv, dest)
+    created.append(dest)
     return created
 
 
@@ -1118,7 +1116,7 @@ def parse_visual_clear_ids(raw: str) -> list[str]:
 
 
 def apply_visual_review_clears(queue_csv: Path, transaction_ids: list[str]) -> tuple[int, list[str]]:
-    """Mark visually confirmed false alarms as Needs Human? = no in an existing queue CSV.
+    """Mark visually confirmed false alarms as Needs Human? = no in the queue xlsx.
 
     Does not re-run OCR. Only rows currently flagged yes for the given Transaction IDs
     are rewritten (Merchant/Amount Match flipped to Matched; Reason set to the same
@@ -1127,15 +1125,17 @@ def apply_visual_review_clears(queue_csv: Path, transaction_ids: list[str]) -> t
     wanted = {t.strip() for t in transaction_ids if t.strip()}
     if not wanted:
         raise SystemExit("No Transaction IDs given to --visual-clear.")
-    if not queue_csv.is_file():
-        raise SystemExit(f"Queue CSV not found: {queue_csv}")
+    queue_path = queue_csv
+    if queue_path.suffix.lower() == ".csv":
+        xlsx = queue_path.with_suffix(".xlsx")
+        if xlsx.is_file() or not queue_path.is_file():
+            queue_path = xlsx
+    if not queue_path.is_file():
+        raise SystemExit(f"Queue not found: {queue_path}")
 
-    with queue_csv.open(newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        fieldnames = list(reader.fieldnames or [])
-        rows = list(reader)
+    fieldnames, rows = load_queue_rows(queue_path)
     if "Transaction ID" not in fieldnames or "Needs Human?" not in fieldnames:
-        raise SystemExit(f"Queue CSV missing Transaction ID or Needs Human?: {queue_csv}")
+        raise SystemExit(f"Queue missing Transaction ID or Needs Human?: {queue_path}")
 
     found: set[str] = set()
     cleared = 0
@@ -1166,7 +1166,7 @@ def apply_visual_review_clears(queue_csv: Path, transaction_ids: list[str]) -> t
             row["Scan Notes"] = notes
         cleared += 1
 
-    write_tif_review_queue(queue_csv, fieldnames, rows)
+    write_tif_review_queue(queue_path, fieldnames, rows)
 
     missing = [t for t in transaction_ids if t.strip() and t.strip() not in found]
     return cleared, missing
@@ -1199,7 +1199,7 @@ def main() -> None:
         "--output",
         type=Path,
         default=None,
-        help="Output CSV (English columns). Default with --run-dir: <run_dir>/tif_review_queue.csv. "
+        help="Output path. Default with --run-dir: <run_dir>/tif_review_queue.xlsx. "
         "If omitted without --run-dir: stdout.",
     )
     ap.add_argument(
@@ -1223,20 +1223,20 @@ def main() -> None:
         "--visual-clear",
         default="",
         help="Comma-separated Transaction IDs visually confirmed as false alarms. Updates "
-        "tif_review_queue.csv and .xlsx in place (Needs Human?=no); does not re-run OCR.",
+        "tif_review_queue.xlsx in place (Needs Human?=no); does not re-run OCR.",
     )
     args = ap.parse_args()
 
     if args.visual_clear:
         tids = parse_visual_clear_ids(args.visual_clear)
         if args.run_dir is not None:
-            queue_csv = args.run_dir.resolve() / "tif_review_queue.csv"
+            queue_csv = resolve_tif_review_queue(args.run_dir.resolve())
         elif args.output is not None:
             queue_csv = args.output
         else:
-            raise SystemExit("--visual-clear requires --run-dir or --output (the queue CSV).")
+            raise SystemExit("--visual-clear requires --run-dir or --output (the queue xlsx).")
         cleared, missing = apply_visual_review_clears(queue_csv, tids)
-        print(f"Visual review: cleared {cleared} row(s) in {queue_csv}")
+        print(f"Visual review: cleared {cleared} row(s) in {queue_csv.with_suffix('.xlsx')}")
         print(f"Wrote: {queue_csv.with_suffix('.xlsx')} (Needs Human? conditional formatting)")
         if missing:
             print(
@@ -1275,7 +1275,7 @@ def main() -> None:
         args.invoice_csv = inv
         args.image_dir = img
         if args.output is None:
-            args.output = run_dir / "tif_review_queue.csv"
+            args.output = run_dir / "tif_review_queue.xlsx"
         if not args.quiet:
             print(
                 f"Run directory: {run_dir}\n  invoice CSV: {args.invoice_csv.name}\n  image folder: {args.image_dir.name}\n",
@@ -1376,8 +1376,7 @@ def main() -> None:
     if args.output:
         xlsx_path = write_tif_review_queue(args.output, out_fields, rows_out)
         if not args.quiet:
-            print(f"Wrote: {args.output} ({len(rows_out)} rows)")
-            print(f"Wrote: {xlsx_path} (Needs Human? conditional formatting)")
+            print(f"Wrote: {xlsx_path} ({len(rows_out)} rows, Needs Human? conditional formatting)")
     else:
         w = csv.DictWriter(__import__("sys").stdout, fieldnames=out_fields)
         w.writeheader()

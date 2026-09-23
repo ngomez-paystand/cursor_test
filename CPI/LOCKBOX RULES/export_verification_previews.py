@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Export every page of each TIF listed in tif_review_queue.csv to PNGs under
+Export every page of each TIF listed in tif_review_queue.xlsx to PNGs under
 <run_dir>/verification_previews/<Transaction Id>/page_01.png ...
 TIF Path is normally the .tif filename only; legacy queues may use a file:// URI instead.
 Requires Pillow.
@@ -8,10 +8,10 @@ Requires Pillow.
 from __future__ import annotations
 
 import argparse
-import csv
 import shutil
 from pathlib import Path
 
+from cpi_xlsx import load_queue_rows, resolve_tif_review_queue
 from queue_tif_review import discover_invoice_and_images, tif_path_from_queue_cell
 
 
@@ -40,7 +40,7 @@ def main() -> None:
         "--run-dir",
         type=Path,
         required=True,
-        help="Day folder containing tif_review_queue.csv",
+        help="Day folder containing tif_review_queue.xlsx",
     )
     ap.add_argument(
         "--max-pages",
@@ -51,7 +51,7 @@ def main() -> None:
     )
     args = ap.parse_args()
     run_dir = args.run_dir.resolve()
-    queue_csv = run_dir / "tif_review_queue.csv"
+    queue_csv = resolve_tif_review_queue(run_dir)
     if not queue_csv.is_file():
         raise SystemExit(f"Missing {queue_csv} (run queue_tif_review.py first).")
 
@@ -63,16 +63,15 @@ def main() -> None:
     base_out.mkdir(parents=True, exist_ok=True)
 
     count = 0
-    with queue_csv.open(newline="", encoding="utf-8", errors="replace") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            tid = (row.get("Transaction ID") or "").strip()
-            raw = (row.get("TIF Path") or "").strip()
-            tif = tif_path_from_queue_cell(raw, image_dir)
-            if not tid or not tif.is_file():
-                continue
-            extract_pages(tif, base_out / tid, args.max_pages)
-            count += 1
+    _fields, rows = load_queue_rows(queue_csv)
+    for row in rows:
+        tid = (row.get("Transaction ID") or "").strip()
+        raw = (row.get("TIF Path") or "").strip()
+        tif = tif_path_from_queue_cell(raw, image_dir)
+        if not tid or not tif.is_file():
+            continue
+        extract_pages(tif, base_out / tid, args.max_pages)
+        count += 1
     cap = f"up to {args.max_pages} page(s)" if args.max_pages else "all pages"
     print(f"Wrote previews under {base_out} ({count} transaction(s), {cap} per TIF).")
 

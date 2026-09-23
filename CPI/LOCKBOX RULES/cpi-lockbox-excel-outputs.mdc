@@ -11,7 +11,7 @@ El formato vive **solo** en los archivos que escriben los scripts en la carpeta 
 
 ## `tif_review_queue.xlsx`
 
-`queue_tif_review.py` escribe el CSV **y** un `.xlsx` hermano (misma data).
+`queue_tif_review.py` escribe **solo** `tif_review_queue.xlsx` (ya no se genera el CSV).
 
 Formato condicional en **Needs Human?** (columna I en el queue diario, sin Fecha):
 

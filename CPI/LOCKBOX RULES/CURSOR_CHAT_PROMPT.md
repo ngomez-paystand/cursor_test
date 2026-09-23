@@ -47,17 +47,15 @@ cursor_test/                         ← open this in Cursor (repo root)
     │   └── cpi-lockbox-*.mdc
     └── AUGUST/                      ← month folder (JULY/, SEPTEMBER/, etc.)
         └── 08-27-2026/              ← day folder, name = MM-DD-YYYY
-            ├── OG_Paystand_Invoice_Detail_08_27_2026.csv   # original, never edit
-            ├── OG_Paystand_Check_Detail_08_27_2026.csv
+            ├── OG_Paystand_Invoice_Detail_08_27_2026.csv   # original invoice, never edit
             ├── Paystand_Invoice_Detail_08_27_2026.csv      # working copy
             ├── Paystand_Check_Detail_08_27_2026.csv
-            ├── Paystand_Image_Detail_08_27_2026/           # TIFs + metadata.csv + OG_metadata.csv
-            ├── tif_review_queue.csv                         # generated
-            ├── tif_review_queue.xlsx                        # generated (same data + Needs Human? colors)
+            ├── Paystand_Image_Detail_08_27_2026/           # TIFs + metadata.csv
+            ├── tif_review_queue.xlsx                        # generated (Needs Human? colors)
             └── lockbox_report.xlsx                          # generated (Good? + ops checklist)
 ```
 
-If the user only says a date like `08-27-2026`, locate that folder under the month directories, confirm invoice + check + image folder exist, then run the pipeline. If the day was already processed (`tif_review_queue.csv` already present) and they ask to re-run OCR, **ask first** (full OCR is slow). Exception: they explicitly say “re-run it” / “run OCR again”.
+If the user only says a date like `08-27-2026`, locate that folder under the month directories, confirm invoice + check + image folder exist, then run the pipeline. If the day was already processed (`tif_review_queue.xlsx` already present) and they ask to re-run OCR, **ask first** (full OCR is slow). Exception: they explicitly say “re-run it” / “run OCR again”.
 
 One-time deps (if needed):
 
@@ -102,7 +100,7 @@ What this does:
 
 - Comma-audits the three source exports; aborts on any issue.
 - OCRs every invoice-detail row’s TIF.
-- Writes `tif_review_queue.csv` and `tif_review_queue.xlsx` in the day folder.
+- Writes `tif_review_queue.xlsx` in the day folder (no CSV).
 
 Scan types:
 
@@ -138,7 +136,7 @@ This sets those rows to `Needs Human? = no`, Match = Matched, and appends to Sca
 
 `Additional visual review by LUCAS confirmed payee and amount on TIF.`
 
-Do **not** put a special mark in the Excel `Good?` column — Excel stays `y` / `n` / `not a check`. The LUCAS note lives only in the queue Scan Notes (`tif_review_queue.csv` / `.xlsx`).
+Do **not** put a special mark in the Excel `Good?` column — Excel stays `y` / `n` / `not a check`. The LUCAS note lives only in the queue Scan Notes (`tif_review_queue.xlsx`).
 
 ### D) Build lockbox Excel
 
@@ -161,7 +159,7 @@ The lockbox Excel also writes the daily **ops checklist** at **O2:P12** (column 
 
 Apply this **only** to the files the scripts write in the day folder. Do **not** apply colors or checklist formatting to Google Sheets (e.g. *Lockbox Merchant Check 5.0*).
 
-**`tif_review_queue.xlsx`** (same columns as the CSV):
+**`tif_review_queue.xlsx`:**
 
 - Conditional formatting on **Needs Human?** (column I on the daily queue, no Fecha):
   - text contains `no` → green `#B7E1CD`
@@ -250,8 +248,7 @@ On any of these: stop, describe, wait for manual fix of the **raw** CSVs, re-con
 
 Per day folder:
 
-- `tif_review_queue.csv` — AI review queue (includes Scan Notes / LUCAS visual-clear notes)
-- `tif_review_queue.xlsx` — same queue, with Needs Human? green/pink conditional formatting
+- `tif_review_queue.xlsx` — AI review queue (Scan Notes / LUCAS visual-clear notes + Needs Human? colors)
 - `lockbox_report.xlsx` — operational lockbox sheet with `Good?` plus ops checklist O2:P12 (O2 and O9 always pink)
 
 Do not commit day folders (Paystand exports, TIFs, generated reports) to git unless the user explicitly asks.

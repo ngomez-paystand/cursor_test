@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build lockbox review Excel from Paystand invoice export + tif_review_queue.csv.
+Build lockbox review Excel from Paystand invoice export + tif_review_queue.xlsx.
 
 Includes every invoice export row (same order as the CSV), then the Paystand export
 footer (row count + total amount) as the last spreadsheet row.
@@ -29,6 +29,7 @@ import argparse
 import csv
 from pathlib import Path
 
+from cpi_xlsx import load_queue_rows, resolve_tif_review_queue, save_workbook
 from queue_tif_review import (
     discover_invoice_and_images,
     ensure_run_dir_exports_commas_clean,
@@ -38,7 +39,6 @@ from queue_tif_review import (
     load_invoice_export_rows,
     merchant_lookup_merged,
 )
-from cpi_xlsx import save_workbook
 
 OUTPUT_COLUMNS = [
     "Mail Stop",
@@ -112,35 +112,34 @@ def load_queue_needs_human(queue_csv: Path) -> dict[tuple[str, str], tuple[str, 
     """(Transaction ID, Invoice Number) -> (Needs Human?, Reason) (last row wins if duplicates).
 
     Keyed by the pair (not Transaction ID alone) because a single check can have both an
-    invoice-0 line (full scan) and an invoiced line (misroute-only scan) in tif_review_queue.csv;
+    invoice-0 line (full scan) and an invoiced line (misroute-only scan) in tif_review_queue.xlsx;
     keying by Transaction ID alone would let one scan type's result overwrite the other's.
     """
     out: dict[tuple[str, str], tuple[str, str]] = {}
-    with queue_csv.open(newline="", encoding="utf-8", errors="replace") as f:
-        reader = csv.DictReader(f)
-        tid_key = None
-        inv_key = None
-        nh_key = None
-        reason_key = None
-        for name in reader.fieldnames or []:
-            if name.replace(" ", "").lower() in ("transactionid",):
-                tid_key = name
-            if name.strip().lower() == "invoice number":
-                inv_key = name
-            if name.strip().lower() == "needs human?":
-                nh_key = name
-            if name.strip().lower() == "reason":
-                reason_key = name
-        if not tid_key or not nh_key:
-            raise SystemExit(
-                f"Queue CSV missing Transaction ID or Needs Human? columns: {queue_csv}"
-            )
-        for row in reader:
-            tid = (row.get(tid_key) or "").strip()
-            inv = (row.get(inv_key) or "").strip() if inv_key else ""
-            if tid:
-                reason = (row.get(reason_key) or "").strip() if reason_key else ""
-                out[(tid, inv)] = ((row.get(nh_key) or "").strip(), reason)
+    fieldnames, rows = load_queue_rows(queue_csv)
+    tid_key = None
+    inv_key = None
+    nh_key = None
+    reason_key = None
+    for name in fieldnames:
+        if name.replace(" ", "").lower() in ("transactionid",):
+            tid_key = name
+        if name.strip().lower() == "invoice number":
+            inv_key = name
+        if name.strip().lower() == "needs human?":
+            nh_key = name
+        if name.strip().lower() == "reason":
+            reason_key = name
+    if not tid_key or not nh_key:
+        raise SystemExit(
+            f"Queue missing Transaction ID or Needs Human? columns: {queue_csv}"
+        )
+    for row in rows:
+        tid = (row.get(tid_key) or "").strip()
+        inv = (row.get(inv_key) or "").strip() if inv_key else ""
+        if tid:
+            reason = (row.get(reason_key) or "").strip() if reason_key else ""
+            out[(tid, inv)] = ((row.get(nh_key) or "").strip(), reason)
     return out
 
 
@@ -287,7 +286,7 @@ def main() -> None:
         "--run-dir",
         type=Path,
         required=True,
-        help="Day folder (e.g. JUNE/06-04-2026) with invoice CSV and tif_review_queue.csv",
+        help="Day folder (e.g. JUNE/06-04-2026) with invoice CSV and tif_review_queue.xlsx",
     )
     ap.add_argument(
         "--invoice-csv",
@@ -299,7 +298,7 @@ def main() -> None:
         "--queue-csv",
         type=Path,
         default=None,
-        help="Override tif_review_queue.csv (default: <run-dir>/tif_review_queue.csv)",
+        help="Override queue path (default: <run-dir>/tif_review_queue.xlsx)",
     )
     ap.add_argument(
         "-o",
@@ -330,9 +329,9 @@ def main() -> None:
         invoice_csv, _ = discover_invoice_and_images(run_dir)
     else:
         invoice_csv = args.invoice_csv.resolve()
-    queue_csv = (args.queue_csv or run_dir / "tif_review_queue.csv").resolve()
+    queue_csv = (args.queue_csv or resolve_tif_review_queue(run_dir)).resolve()
     if not queue_csv.is_file():
-        raise SystemExit(f"Queue CSV not found: {queue_csv}")
+        raise SystemExit(f"Queue not found: {queue_csv}")
     out_path = (args.output or run_dir / "lockbox_report.xlsx").resolve()
 
     lookup_dirs = [run_dir, invoice_csv.parent, here]

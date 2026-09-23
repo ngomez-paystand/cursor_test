@@ -33,11 +33,11 @@ python3 "LOCKBOX RULES/audit_paystand_commas.py" --run-dir <MES>/<MM-DD-YYYY> --
 
 ## Originales `OG_`
 
-Al primer audit/OCR/lockbox de un día, se copian invoice, check y `metadata.csv` a
-`OG_<mismo nombre>` (invoice/check en la carpeta del día; `OG_metadata.csv` en la carpeta de
-imágenes). Esas copias **no se editan nunca**. Si hay que corregir comillas o un mal ruteo, se
-editan solo los archivos de trabajo (`Paystand_*.csv` / `metadata.csv`). El pipeline ignora
-cualquier CSV que empiece con `OG_`.
+Al primer audit/OCR/lockbox de un día, se copia **solo el invoice** a
+`OG_<mismo nombre>` en la carpeta del día. Esa copia **no se edita nunca**. Check y
+`metadata.csv` se auditan igual, pero no se guarda `OG_` de ellos. Si hay que corregir
+comillas o un mal ruteo, se editan solo los archivos de trabajo (`Paystand_*.csv` /
+`metadata.csv`). El pipeline ignora cualquier CSV que empiece con `OG_`.
 
 ## Corrección de comillas (el usuario la hace; el agente solo la identifica)
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import csv
 
 from openpyxl.formatting.rule import Rule
 from openpyxl.styles import Border, Font, PatternFill
@@ -109,3 +110,57 @@ def write_dict_rows_xlsx(
     apply_needs_human_conditional_formatting(ws)
     path.parent.mkdir(parents=True, exist_ok=True)
     save_workbook(wb, path)
+
+
+def read_dict_rows_xlsx(path: Path) -> tuple[list[str], list[dict]]:
+    """Read the first sheet of a queue workbook into fieldnames + row dicts."""
+    try:
+        import openpyxl
+    except ImportError as e:
+        raise SystemExit(
+            "openpyxl required to read .xlsx queue: pip install openpyxl"
+        ) from e
+    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    ws = wb.active
+    it = ws.iter_rows(values_only=True)
+    try:
+        header_row = next(it)
+    except StopIteration:
+        wb.close()
+        return [], []
+    fieldnames = ["" if c is None else str(c) for c in header_row]
+    rows: list[dict] = []
+    for tup in it:
+        row = {}
+        for i, name in enumerate(fieldnames):
+            if not name:
+                continue
+            val = tup[i] if i < len(tup) else None
+            if val is None:
+                row[name] = ""
+            else:
+                row[name] = str(val).strip() if not isinstance(val, str) else val
+        rows.append(row)
+    wb.close()
+    return fieldnames, rows
+
+
+def resolve_tif_review_queue(run_dir: Path) -> Path:
+    """Prefer tif_review_queue.xlsx; fall back to .csv for older day folders."""
+    xlsx = run_dir / "tif_review_queue.xlsx"
+    csv_path = run_dir / "tif_review_queue.csv"
+    if xlsx.is_file():
+        return xlsx
+    if csv_path.is_file():
+        return csv_path
+    return xlsx
+
+
+def load_queue_rows(path: Path) -> tuple[list[str], list[dict]]:
+    if path.suffix.lower() == ".xlsx":
+        return read_dict_rows_xlsx(path)
+    with path.open(newline="", encoding="utf-8", errors="replace") as f:
+        reader = csv.DictReader(f)
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+    return fieldnames, rows
