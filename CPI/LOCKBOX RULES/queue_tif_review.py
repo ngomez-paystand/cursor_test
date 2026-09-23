@@ -403,10 +403,11 @@ def og_snapshot_path(src: Path) -> Path:
 
 
 def snapshot_original_exports(run_dir: Path) -> list[Path]:
-    """Copy working invoice, check, and image metadata to OG_<filename> once.
+    """Copy working invoice, check, and the whole image folder to OG_<name> once.
 
-    Never overwrite existing OG_ files. Image metadata lives in the image folder as
-    OG_metadata.csv (working file stays metadata.csv).
+    Never overwrite an existing OG_ copy. The OG_ image folder is a full duplicate
+    (TIFs + the original metadata.csv); the working folder keeps the metadata.csv
+    that gets corrected.
     """
     created: list[Path] = []
     invoice_csv, image_dir = discover_invoice_and_images(run_dir)
@@ -414,15 +415,16 @@ def snapshot_original_exports(run_dir: Path) -> list[Path]:
     check_csv = discover_check_csv(run_dir)
     if check_csv:
         sources.append(check_csv)
-    meta_csv = discover_image_metadata_csv(image_dir)
-    if meta_csv:
-        sources.append(meta_csv)
     for src in sources:
         dest = og_snapshot_path(src)
         if dest.exists() or not src.is_file():
             continue
         shutil.copy2(src, dest)
         created.append(dest)
+    image_dest = og_snapshot_path(image_dir)
+    if image_dir.is_dir() and not image_dest.exists():
+        shutil.copytree(image_dir, image_dest)
+        created.append(image_dest)
     return created
 
 
@@ -777,7 +779,14 @@ def discover_invoice_and_images(run_dir: Path) -> tuple[Path, Path]:
         invoice_csv = pay[0] if pay else cs[0]
     else:
         invoice_csv = cs[0]
-    imgs = sorted([p for p in run_dir.iterdir() if p.is_dir() and "Image" in p.name and "Detail" in p.name])
+    imgs = sorted(
+        p
+        for p in run_dir.iterdir()
+        if p.is_dir()
+        and "Image" in p.name
+        and "Detail" in p.name
+        and not p.name.startswith(_OG_PREFIX)
+    )
     if not imgs:
         raise FileNotFoundError(
             f"No *Image*Detail* folder in {run_dir} (e.g. Paystand_Image_Detail_MM_DD_YYYY)"

@@ -49,9 +49,10 @@ cursor_test/                         ← open this in Cursor (repo root)
         └── 08-27-2026/              ← day folder, name = MM-DD-YYYY
             ├── OG_Paystand_Invoice_Detail_08_27_2026.csv   # original, never edit
             ├── OG_Paystand_Check_Detail_08_27_2026.csv
+            ├── OG_Paystand_Image_Detail_08_27_2026/        # full copy: TIFs + original metadata.csv
             ├── Paystand_Invoice_Detail_08_27_2026.csv      # working copy
             ├── Paystand_Check_Detail_08_27_2026.csv
-            ├── Paystand_Image_Detail_08_27_2026/           # TIFs + metadata.csv + OG_metadata.csv
+            ├── Paystand_Image_Detail_08_27_2026/           # TIFs + metadata.csv (corrected here)
             ├── tif_review_queue.xlsx                        # generated (Needs Human? colors)
             ├── lockbox_report.xlsx                          # generated (Good? + ops checklist)
             └── verification_previews/                       # PNG pages of each TIF (keep)
@@ -90,6 +91,8 @@ OCR engines: Tesseract if available, else Apple Vision on macOS.
    - `Paystand_Invoice_Detail_*.csv`
    - `Paystand_Check_Detail_*.csv`
    - `Paystand_Image_Detail_*/` containing `<TransactionId>.tif` files and `metadata.csv`
+
+   Ignore anything named `OG_*` (originals). If the user replaces a day folder after a fix, the `OG_*` copies are lost and the next run snapshots the corrected files — say so instead of implying the originals survived.
 2. If already processed and the user only sent the date again, ask whether to re-run OCR.
 
 ### B) Run the OCR queue
@@ -101,7 +104,7 @@ python3 "LOCKBOX RULES/queue_tif_review.py" --run-dir "./<MONTH>/MM-DD-YYYY"
 What this does:
 
 - Comma-audits the three source exports; aborts on any issue.
-- Snapshots invoice, check, and image `metadata.csv` to `OG_*` once (never overwritten).
+- Snapshots invoice CSV, check CSV, and the whole image folder to `OG_*` once (never overwritten). Two identical image folders result: the working one (its `metadata.csv` gets corrected) and the `OG_` one.
 - OCRs every invoice-detail row’s TIF.
 - Writes `tif_review_queue.xlsx` in the day folder (no CSV).
 - Writes `verification_previews/<Transaction ID>/page_XX.png` for every unique TIF (keep this folder).
