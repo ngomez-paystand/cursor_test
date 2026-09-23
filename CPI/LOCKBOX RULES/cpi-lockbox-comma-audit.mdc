@@ -39,6 +39,24 @@ imágenes). Esas copias **no se editan nunca**. Si hay que corregir comillas o u
 editan solo los archivos de trabajo (`Paystand_*.csv` / `metadata.csv`). El pipeline ignora
 cualquier CSV que empiece con `OG_`.
 
+## Corrección de comillas (el agente la hace)
+
+Cuando el audit marque `MALFORMED_QUOTE` o `MERGED_ROWS_DATA_LOSS` por comillas de más en el
+Payer, **el agente corrige los CSV de trabajo** (invoice, check, `metadata.csv`). **Nunca**
+editar `OG_*`.
+
+**Regla:** en el campo Payer deben quedar exactamente **2** comillas ASCII (`"`): una al
+comienzo y una al final. **Cero** comillas adentro. Se borran todas las `"` internas; el resto
+del texto (apóstrofes, comas, puntos) se deja intacto.
+
+Ejemplos:
+- `"Turning your ideas into reality.""` → `"Turning your ideas into reality."`
+- `"A&S "SAUSAGE KING""` → `"A&S SAUSAGE KING"`
+- `"BOARD, INC."` → no tocar (ya está bien)
+- `"O'Brien"` → no tocar (el apóstrofe no es comilla)
+
+Después de corregir: re-correr el audit, continuar el pipeline, y recordatorio SFTP.
+
 ## Recordatorio SFTP
 
 Cada vez que se corrija un archivo de trabajo del día (comillas, comas, mal ruteo, lo que sea),
@@ -63,9 +81,9 @@ Cuando esto pasa: **una transacción desaparece por completo** y la otra queda c
 archivos del día (invoice, check, metadata) con el mismo merchant.
 
 El audit reporta esto como categoría `MERGED_ROWS_DATA_LOSS` y un bloque `🚨 CRITICAL`, e
-**interrumpe el pipeline** (`SystemExit(3)`, no se genera queue ni lockbox) hasta corregir a mano
-el CSV crudo (quitar la comilla de sobra antes de la comilla de cierre) y volver a correr. Este
-chequeo se imprime siempre, incluso con `--quiet`, porque implica pérdida de datos financieros.
+**interrumpe el pipeline** (`SystemExit(3)`, no se genera queue ni lockbox). El agente aplica la
+regla de 2 comillas en los CSV de trabajo, re-corre el audit y continúa. Este chequeo se imprime
+siempre, incluso con `--quiet`, porque implica pérdida de datos financieros.
 
 ## Tercer caso: comilla mal puesta dentro de la misma fila (`MALFORMED_QUOTE`)
 
