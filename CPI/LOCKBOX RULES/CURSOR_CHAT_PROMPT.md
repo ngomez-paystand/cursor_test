@@ -72,8 +72,8 @@ OCR engines: Tesseract if available, else Apple Vision on macOS.
 ## Hard rules (do not violate)
 
 1. **Comma audit is mandatory and blocking.** Every run of `queue_tif_review.py` / `build_lockbox_report.py` starts with a comma audit on invoice, check, and image `metadata.csv`. Read the summary every time.
-2. **If ANY comma-audit issue is found, STOP the queue/lockbox generation.** For `MALFORMED_QUOTE` / `MERGED_ROWS_DATA_LOSS` caused by extra `"` in Payer: **the agent fixes the working CSVs** (invoice, check, `metadata.csv`) so the Payer field has exactly **2** ASCII quotes — one at the start, one at the end, none inside. Re-run the audit, then continue. Never edit `OG_*`. For unquoted payer commas or anything unclear: report TID/file/problem and wait.
-3. **Do not auto-correct Paystand source CSVs except the quote-strip rule above.** Pipeline stays report-only for everything else.
+2. **If ANY comma-audit issue is found, STOP immediately.** Do not generate/overwrite queue or lockbox. Do **not** rewrite invoice, check, or `metadata.csv`. Identify the problem **textually**: file, line, Transaction ID, the broken fragment, and the corrected fragment (exactly 2 ASCII quotes on the Payer — one at start, one at end, none inside). Wait for the user to fix the **working** exports, then confirm, then continue. Never edit `OG_*` originals.
+3. **Never auto-correct Paystand source CSVs.** Pipeline policy is report-only on those files.
 4. **Do not leave OCR false alarms as `Needs Human? = yes` in the final deliverables.** After visual review, clear confirmed false alarms with `--visual-clear`, then rebuild the lockbox Excel.
 5. **Misroutes stay flagged.** The point of the report is to catch them. Do not “fix” the queue to look clean after a misroute.
 6. **Ask before re-running full OCR** on a day that was already processed, unless the user explicitly requests a re-run.

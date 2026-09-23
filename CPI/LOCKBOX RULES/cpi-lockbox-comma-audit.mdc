@@ -39,23 +39,25 @@ imágenes). Esas copias **no se editan nunca**. Si hay que corregir comillas o u
 editan solo los archivos de trabajo (`Paystand_*.csv` / `metadata.csv`). El pipeline ignora
 cualquier CSV que empiece con `OG_`.
 
-## Corrección de comillas (el agente la hace)
+## Corrección de comillas (el usuario la hace; el agente solo la identifica)
 
 Cuando el audit marque `MALFORMED_QUOTE` o `MERGED_ROWS_DATA_LOSS` por comillas de más en el
-Payer, **el agente corrige los CSV de trabajo** (invoice, check, `metadata.csv`). **Nunca**
-editar `OG_*`.
+Payer, **el agente no edita los CSV**. Identifica el problema **textualmente**: archivo, línea,
+TID, el fragmento **roto** y el fragmento **corregido**. Espera a que el usuario corrija los
+archivos de trabajo y avise. **Nunca** editar `OG_*`.
 
-**Regla:** en el campo Payer deben quedar exactamente **2** comillas ASCII (`"`): una al
-comienzo y una al final. **Cero** comillas adentro. Se borran todas las `"` internas; el resto
-del texto (apóstrofes, comas, puntos) se deja intacto.
+**Regla a mostrar:** exactamente **2** comillas ASCII (`"`) — una al comienzo y una al final;
+cero adentro. Apóstrofes, comas y puntos no se tocan.
 
-Ejemplos:
-- `"Turning your ideas into reality.""` → `"Turning your ideas into reality."`
-- `"A&S "SAUSAGE KING""` → `"A&S SAUSAGE KING"`
-- `"BOARD, INC."` → no tocar (ya está bien)
-- `"O'Brien"` → no tocar (el apóstrofe no es comilla)
+Formato del reporte:
 
-Después de corregir: re-correr el audit, continuar el pipeline, y recordatorio SFTP.
+```
+Invoice línea N:
+  está:  "...""
+  debe:  "..."
+```
+
+(igual para check y metadata).
 
 ## Recordatorio SFTP
 
@@ -81,9 +83,10 @@ Cuando esto pasa: **una transacción desaparece por completo** y la otra queda c
 archivos del día (invoice, check, metadata) con el mismo merchant.
 
 El audit reporta esto como categoría `MERGED_ROWS_DATA_LOSS` y un bloque `🚨 CRITICAL`, e
-**interrumpe el pipeline** (`SystemExit(3)`, no se genera queue ni lockbox). El agente aplica la
-regla de 2 comillas en los CSV de trabajo, re-corre el audit y continúa. Este chequeo se imprime
-siempre, incluso con `--quiet`, porque implica pérdida de datos financieros.
+**interrumpe el pipeline** (`SystemExit(3)`, no se genera queue ni lockbox) hasta que el usuario
+corrija a mano el CSV crudo (el agente muestra el texto exacto: está vs debe) y se vuelva a
+correr. Este chequeo se imprime siempre, incluso con `--quiet`, porque implica pérdida de datos
+financieros.
 
 ## Tercer caso: comilla mal puesta dentro de la misma fila (`MALFORMED_QUOTE`)
 
