@@ -12,9 +12,19 @@ Cuando el cheque va a un merchant conocido distinto del Mail Stop del CSV (p. ej
 
 En el resumen del día: **MAL RUTEO** arriba de todo (negritas/mayúsculas). Transaction ID, Mail Stop/merchant incorrecto vs payee correcto, monto. No enterrarlo con las falsas alarmas. Dejar `Needs Human? = yes` en queue/lockbox: el chiste del reporte es detectarlas. No “corregir” el queue para que parezca match.
 
-## 2. Metadata de los tres archivos fuente
+## 2. Snapshot OG_ (si aún no existen) y metadata de los tres archivos fuente
 
-Invoice, check y `metadata.csv` del image (todas las filas de esa Transaction ID, no solo una). **De momento el usuario lo corrige a mano** en los archivos de trabajo (`Paystand_*.csv` / `metadata.csv`). **No editar `OG_*`.** No editar el zip. Confirmar después de su corrección y recordarle **subir los archivos corregidos a la plataforma SFTP**. Pronto el agente lo hará y el usuario supervisará.
+Antes de que el usuario edite nada, correr:
+
+```bash
+python3 "LOCKBOX RULES/queue_tif_review.py" --run-dir <día> --snapshot-og
+```
+
+Así quedan invoice, check y la carpeta Image completa en `OG_*` (originales). Luego el
+usuario corrige a mano los archivos de trabajo (`Paystand_*.csv` / `metadata.csv`) — todas
+las filas de esa Transaction ID, no solo una. **No editar `OG_*`.** No editar el zip.
+Confirmar después de su corrección y recordarle **subir los archivos corregidos a la
+plataforma SFTP**. Pronto el agente lo hará y el usuario supervisará.
 
 ## 3. Redactar el correo (no enviar salvo que lo pida)
 

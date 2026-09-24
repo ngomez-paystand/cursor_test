@@ -41,7 +41,7 @@ python3 "LOCKBOX RULES/build_lockbox_report.py" --run-dir ./AUGUST/08-26-2026
 
 If the comma audit finds any issue, processing stops. Fix the raw invoice/check/`metadata.csv` by hand and re-run. Those source files are never auto-rewritten.
 
-The first run snapshots the invoice CSV, check CSV, and the whole image folder to `OG_*` (once, never overwritten), so the day keeps two identical image folders: the working one, whose `metadata.csv` you correct, and the untouched `OG_` copy.
+`OG_*` copies (invoice, check, full image folder) are created **only** when there is something to correct: quote/comma audit issues, or a misroute (`--snapshot-og`). Clean days skip `OG_` — they would be identical to the working files.
 
 Visually confirmed false alarms (no OCR re-run):
 

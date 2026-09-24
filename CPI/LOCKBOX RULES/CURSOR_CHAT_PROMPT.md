@@ -47,9 +47,9 @@ cursor_test/                         ← open this in Cursor (repo root)
     │   └── cpi-lockbox-*.mdc
     └── AUGUST/                      ← month folder (JULY/, SEPTEMBER/, etc.)
         └── 08-27-2026/              ← day folder, name = MM-DD-YYYY
-            ├── OG_Paystand_Invoice_Detail_08_27_2026.csv   # original, never edit
-            ├── OG_Paystand_Check_Detail_08_27_2026.csv
-            ├── OG_Paystand_Image_Detail_08_27_2026/        # full copy: TIFs + original metadata.csv
+            ├── OG_Paystand_Invoice_Detail_08_27_2026.csv   # only if quote issue or misroute
+            ├── OG_Paystand_Check_Detail_08_27_2026.csv     # (same — originals, never edit)
+            ├── OG_Paystand_Image_Detail_08_27_2026/        # full copy when OG_ is needed
             ├── Paystand_Invoice_Detail_08_27_2026.csv      # working copy
             ├── Paystand_Check_Detail_08_27_2026.csv
             ├── Paystand_Image_Detail_08_27_2026/           # TIFs + metadata.csv (corrected here)
@@ -92,7 +92,7 @@ OCR engines: Tesseract if available, else Apple Vision on macOS.
    - `Paystand_Check_Detail_*.csv`
    - `Paystand_Image_Detail_*/` containing `<TransactionId>.tif` files and `metadata.csv`
 
-   Ignore anything named `OG_*` (originals). If the user replaces a day folder after a fix, the `OG_*` copies are lost and the next run snapshots the corrected files — say so instead of implying the originals survived.
+   Ignore anything named `OG_*` (originals). `OG_*` exist only on days with a quote/comma fix or a misroute — not on clean days.
 2. If already processed and the user only sent the date again, ask whether to re-run OCR.
 
 ### B) Run the OCR queue
@@ -104,7 +104,8 @@ python3 "LOCKBOX RULES/queue_tif_review.py" --run-dir "./<MONTH>/MM-DD-YYYY"
 What this does:
 
 - Comma-audits the three source exports; aborts on any issue.
-- Snapshots invoice CSV, check CSV, and the whole image folder to `OG_*` once (never overwritten). Two identical image folders result: the working one (its `metadata.csv` gets corrected) and the `OG_` one.
+- On quote/comma issues only: snapshots invoice, check, and the whole image folder to `OG_*` (once). Clean days get no `OG_` (would be identical to working files).
+- On a **misroute**, after visual review: run `--snapshot-og` before the user edits working CSVs.
 - OCRs every invoice-detail row’s TIF.
 - Writes `tif_review_queue.xlsx` in the day folder (no CSV).
 - Writes `verification_previews/<Transaction ID>/page_XX.png` for every unique TIF (keep this folder).

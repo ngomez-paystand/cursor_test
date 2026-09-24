@@ -33,15 +33,21 @@ python3 "LOCKBOX RULES/audit_paystand_commas.py" --run-dir <MES>/<MM-DD-YYYY> --
 
 ## Originales `OG_`
 
-Al primer audit/OCR/lockbox de un día se crean tres copias `OG_<mismo nombre>`, una vez y
-sin sobrescribir:
+**Solo** se crean cuando hay algo que corregir:
+
+1. **Comillas / comas** (`MALFORMED_QUOTE`, `MERGED_ROWS_DATA_LOSS`, unquoted comma): el
+   audit crea `OG_` **antes** de abortar, para que el usuario corrija los archivos de trabajo.
+2. **Mal ruteo**: el agente corre
+   `python3 "LOCKBOX RULES/queue_tif_review.py" --run-dir <día> --snapshot-og`
+   al reportar el mal ruteo (antes de que se editen los CSV).
+
+En un día limpio **no** hay `OG_`: serían idénticos a los de trabajo. Cuando sí se crean:
 
 - `OG_Paystand_Invoice_Detail_*.csv`
 - `OG_Paystand_Check_Detail_*.csv`
-- `OG_Paystand_Image_Detail_*/` — **carpeta completa** (TIFs + `metadata.csv` original)
+- `OG_Paystand_Image_Detail_*/` — carpeta completa (TIFs + `metadata.csv` original)
 
-Quedan dos carpetas de imágenes idénticas: la de trabajo, cuyo `metadata.csv` se corrige, y
-la `OG_`, que no se toca. El pipeline ignora cualquier CSV o carpeta que empiece con `OG_`.
+Nunca se sobrescriben. El pipeline ignora cualquier CSV o carpeta que empiece con `OG_`.
 Las correcciones van **solo** en los archivos de trabajo.
 
 ## Corrección de comillas (el usuario la hace; el agente solo la identifica)

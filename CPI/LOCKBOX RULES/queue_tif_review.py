@@ -405,9 +405,9 @@ def og_snapshot_path(src: Path) -> Path:
 def snapshot_original_exports(run_dir: Path) -> list[Path]:
     """Copy working invoice, check, and the whole image folder to OG_<name> once.
 
-    Never overwrite an existing OG_ copy. The OG_ image folder is a full duplicate
-    (TIFs + the original metadata.csv); the working folder keeps the metadata.csv
-    that gets corrected.
+    Call only when something will be corrected (extra quotes / comma issues, or a
+    misroute). On a clean day OG_ would be identical to the working files — skip it.
+    Never overwrite an existing OG_ copy.
     """
     created: list[Path] = []
     invoice_csv, image_dir = discover_invoice_and_images(run_dir)
@@ -426,6 +426,15 @@ def snapshot_original_exports(run_dir: Path) -> list[Path]:
         shutil.copytree(image_dir, image_dest)
         created.append(image_dest)
     return created
+
+
+def _print_og_created(created: list[Path]) -> None:
+    if not created:
+        return
+    print("Originals saved (OG_ copies, never edited):", flush=True)
+    for p in created:
+        print(f"  {p.name}", flush=True)
+    print(flush=True)
 
 
 def discover_check_csv(run_dir: Path) -> Path | None:
@@ -607,20 +616,20 @@ def ensure_run_dir_exports_commas_clean(
     auto_fix: bool = True,
     backup: bool = False,
 ) -> list[CommaAuditReport]:
-    """Audit payer comma alignment; optionally rewrite exports with quoted payers."""
+    """Audit payer comma alignment; optionally rewrite exports with quoted payers.
+
+    OG_ snapshots are created only when the audit finds issues (extra quotes / commas).
+    A clean day does not duplicate the image folder.
+    """
     layout = {
         "invoice": (_PAYSTAND_INVOICE_HEAD_COLS, _PAYSTAND_INVOICE_TAIL_COLS),
         "check": (_PAYSTAND_CHECK_HEAD_COLS, _PAYSTAND_CHECK_TAIL_COLS),
         "image metadata": (_PAYSTAND_IMAGE_META_HEAD_COLS, _PAYSTAND_IMAGE_META_TAIL_COLS),
     }
-    created_og = snapshot_original_exports(run_dir)
-    if created_og:
-        print("Originals saved (OG_ copies, never edited):", flush=True)
-        for p in created_og:
-            print(f"  {p.name}", flush=True)
-        print(flush=True)
-
     initial = audit_run_dir_exports(run_dir)
+    if any(r.misaligned for r in initial):
+        _print_og_created(snapshot_original_exports(run_dir))
+
     fixed_by_label: dict[str, int] = {}
     if auto_fix:
         for report in initial:
@@ -1275,12 +1284,28 @@ def main() -> None:
         "only, never rewrites files); skip OCR queue.",
     )
     ap.add_argument(
+        "--snapshot-og",
+        action="store_true",
+        help="Copy working invoice/check/image folder to OG_* once (for misroute days). "
+        "Does not run OCR. Skips files/folders that already have an OG_ copy.",
+    )
+    ap.add_argument(
         "--visual-clear",
         default="",
         help="Comma-separated Transaction IDs visually confirmed as false alarms. Updates "
         "tif_review_queue.xlsx in place (Needs Human?=no); does not re-run OCR.",
     )
     args = ap.parse_args()
+
+    if args.snapshot_og:
+        if args.run_dir is None:
+            raise SystemExit("--snapshot-og requires --run-dir.")
+        created = snapshot_original_exports(args.run_dir.resolve())
+        if created:
+            _print_og_created(created)
+        else:
+            print("OG_ copies already present (or nothing to snapshot).", flush=True)
+        return
 
     if args.visual_clear:
         tids = parse_visual_clear_ids(args.visual_clear)
