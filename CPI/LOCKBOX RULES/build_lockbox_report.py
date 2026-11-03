@@ -9,8 +9,8 @@ Good? rules:
   Invoice Number 0/empty (full scan — merchant + amount):
     Needs Human? = no  -> y
     Needs Human? = yes -> n
-    Reason starts with "Not a check" (TIF confidently has no check image at all,
-      e.g. a mailed notice/letter/legal filing/envelope) -> not a check
+    Reason starts with "Not a check" (no CSV amount, and the TIF has no payee line
+      and no legible check amount, or it matches a known non-check document) -> not a check
     No queue row for Transaction Id -> Good? left blank
   Invoice Number present (misroute-only check; amount not evaluated):
     Needs Human? = yes (OCR payee matches a different known merchant) -> n

@@ -73,12 +73,12 @@ OCR engines: Tesseract if available, else Apple Vision on macOS.
 ## Hard rules (do not violate)
 
 1. **Comma audit is mandatory and blocking.** Every run of `queue_tif_review.py` / `build_lockbox_report.py` starts with a comma audit on invoice, check, and image `metadata.csv`. Read the summary every time.
-2. **If ANY comma-audit issue is found, STOP immediately.** Do not generate/overwrite queue or lockbox. Do **not** rewrite invoice, check, or `metadata.csv`. Identify the problem **textually**: file, line, Transaction ID, the broken fragment, and the corrected fragment (exactly 2 ASCII quotes on the Payer — one at start, one at end, none inside). Wait for the user to fix the **working** exports, then confirm, then continue. Never edit `OG_*` originals.
+2. **If ANY comma-audit issue is found, STOP immediately.** Do not generate/overwrite queue or lockbox. Do **not** rewrite invoice, check, or `metadata.csv` yet. **Propose** the change textually: file, line, Transaction ID, broken vs corrected fragment (exactly 2 ASCII quotes on the Payer — one at start, one at end, none inside). Ask whether the agent should apply it or the user will fix manually; only edit after an explicit yes. Confirm, then continue. Never edit `OG_*` originals.
 3. **Never auto-correct Paystand source CSVs.** Pipeline policy is report-only on those files.
 4. **Do not leave OCR false alarms as `Needs Human? = yes` in the final deliverables.** After visual review, clear confirmed false alarms with `--visual-clear`, then rebuild the lockbox Excel.
 5. **Misroutes stay flagged.** The point of the report is to catch them. Do not “fix” the queue to look clean after a misroute.
 6. **Ask before re-running full OCR** on a day that was already processed, unless the user explicitly requests a re-run.
-7. **Whenever a working file is corrected** (quotes, commas, misroute, anything), remind the user at the end of the report to **upload the corrected files to the SFTP platform**. Reminder only — never upload anything.
+7. **Whenever a working file is corrected** (quotes, commas, misroute, anything), end the **in-chat** report with a hard-to-miss SFTP reminder in **bold + ALL CAPS** (e.g. **VOLVER A SUBIR LOS ARCHIVOS CORREGIDOS A SFTP** — invoice / check / `metadata.csv` as applicable). Chat only — never mention SFTP in the Slack bot post. Reminder only — never upload anything.
 8. Prefer short, direct status updates to the user. Lead with what matters (misroutes first).
 
 ---
@@ -115,7 +115,11 @@ Scan types:
 - **No Invoice** (Invoice Number empty/0): full check — merchant (via Mail Stop → `mail_stop_merchants.csv` + `merchant_aliases.csv`) and check amount must match the TIF.
 - **Invoice On File**: lighter misroute check only — flag only when OCR payee clearly matches a *different known* merchant.
 
-Also auto-clears some **not a check** docs when CSV check amount is missing and OCR matches curated patterns in `tif_scan_match.py` (`detect_non_check_document`). Examples: EFT/non-negotiable, direct deposit advice, unclaimed-property/escheatment, outstanding-check notices, insolvency/administration letters, AvidXchange notices, envelopes, etc. Only when amount is missing from the CSV — never guess on a real check.
+When the CSV check amount is missing, classify the TIF in `detect_non_check_document`:
+
+- No pay-to line and no legible check amount → `Not a check` (even if the text is not in the curated list). A known phrase (EFT, envelope, escheatment, AvidXchange, etc.) only supplies a more specific label.
+- Pay-to line or a legible check amount → leave `Needs Human? = yes` (`Good? = n`). A blank amount on something that still looks like a check is not auto-cleared.
+- OCR failure or empty text → do not guess; leave it for review.
 
 ### C) Visual review of every `Needs Human? = yes` row (required)
 
@@ -131,6 +135,7 @@ Classify each flagged row:
 |--------|------------|
 | **False alarm** (payee and amount match; OCR failed on handwriting/scan quality) | Clear with `--visual-clear` (see below). |
 | **MISROUTE** (check payee is a different *known* merchant than the Mail Stop) | Leave `Needs Human? = yes`. Highest priority in the user report. |
+| **Possible duplicate check** (different TIDs, same Mail Stop + Check Number, similar Payer — often mismatched amounts) | Leave `Needs Human? = yes`. Compare both TIFs. Do **not** `--visual-clear` unless they are clearly two different physical checks. |
 | **Real pending** (true mismatch, illegible, missing mail stop, likely new alias, or non-check that didn’t match patterns) | Leave flagged; explain what you saw. |
 | **New reliable “not a check” pattern** | Propose adding a pattern to `_NON_CHECK_DOCUMENT_PATTERNS` in `tif_scan_match.py` (only if CSV amount is missing for that path). Do not silently invent patterns. |
 
@@ -189,6 +194,7 @@ After `--visual-clear` and regenerating the lockbox:
 3. False alarms: one short line — already cleared in the files.
 4. Comma audit: OK or stopped (never claim OK without reading that run’s output).
 5. Counts: rows processed, `Good?` summary if useful.
+6. **Always** after the in-chat lectura report, post to `C0C8309D22C` (*MISQUOTES* / *BAD ROUTES* / *Other* — English only). If the day had a misquote, do **not** post at the audit stop: post only after the quote is corrected, and *MISQUOTES* must say it was detected and corrected.
 
 ---
 
@@ -197,24 +203,33 @@ After `--visual-clear` and regenerating the lockbox:
 When the check is payable to a different known merchant than the Mail Stop in the CSV (example: deposited to Sharetru MS 166 but check says CBUSA LLC MS 162):
 
 1. **Notify first, prominently.** Keep `Needs Human? = yes` in queue/lockbox so the report still detects it. Do not “fix” the queue to look matched.
-2. **Source metadata correction:** invoice, check, and **every** `metadata.csv` row for that Transaction ID (and the image zip if present). **For now the user corrects those by hand.** You confirm after they say it’s fixed. Do not edit invoice/check/metadata/zip yourself unless the user later asks you to and supervises.
-3. **Draft this email** (English). Do not send unless they ask. Substitute the real merchants, mail stops, TID, and amount.
+2. **Propose source corrections** (invoice, check, and **every** `metadata.csv` row for that Transaction ID): show current vs proposed (e.g. Mail Stop 162 → 161). **Do not edit yet.** Ask whether the agent should apply the change or the user will do it manually. Only edit after an explicit yes. Never edit `OG_*` or the zip. Confirm after the fix and remind **SFTP**.
+3. **Draft this email** (English). Do not send unless they ask. Substitute the real merchants, mail stops, TID, and amount. Always include a **Subject** line:
+
+`Check Sent to Wrong Mailstop (CORRECT_MS, WRONG_MS)` — correct Mail Stop first, wrong second (e.g. `Check Sent to Wrong Mailstop (161, 162)`).
 
 Customer names: short trade name only. Strip legal suffixes (`Inc.`, `LLC`, `Corp.`, `Ltd.`, `LLP`, `PLLC`, `Co.`, and similar). Example: `Oofos Inc.` → `Oofos`; `ProctorU Inc.` → `ProctorU`; `Tripleseat Software LLC` → `Tripleseat Software`.
 
-`Check Info:`, `Transaction ID:`, and `Check Amount:` each on their own row, with a blank line between them. Never the same line or the same paragraph.
+`Check Info:`, `Transaction ID:`, and `Check Amount:` each on their own row, with **no** blank lines between them. Never the same line or the same paragraph.
 
 ```text
-Hi All, We had one check sent to the wrong mailstop today, please ensure the funds are sent to the right place. The check was incorrectly sent to Sharetru (MS 166), but should have been sent to Tripleseat Software (MS 160).
+Subject: Check Sent to Wrong Mailstop (160, 166)
+
+Hi All,
+
+We had one check sent to the wrong mailstop today, please ensure the funds are sent to the right place. The check was incorrectly sent to Sharetru (MS 166), but should have been sent to Tripleseat Software (MS 160).
 
 Check Info:
-
 Transaction ID: 43473717
-
 Check Amount: $250
 
 Thank you,
 ```
+`Hi All,` alone on its line; blank line; then the body.
+
+**Daily Slack status (always):** after you have given the user the lectura summary **in this chat** (OCR + visual review + lockbox), post that snapshot to `C0C8309D22C` in **English only**: *MISQUOTES* / *BAD ROUTES* / *Other* (never Spanish section titles like *Otros*). If the comma audit found a misquote, **do not post yet**. Post only after that quote is corrected, and *MISQUOTES* must say a misquote was **detected and corrected** (TID, was → now, invoice / check / metadata). A clean day stays *MISQUOTES:* OK. If *BAD ROUTES:* BAD, include the English misroute **email draft** (Subject + body per misroute playbook) in the same Slack message for easy copy. Do not mention SFTP in Slack. Do not wait for the user to ask. Immediate; do not re-ask destination. **Post via the Lockbox channel webhook Automation (Cursor bot)** — not Slack MCP — so Nelson gets notifications. Webhook URL/key live in `cpi-lockbox-misroute.mdc` §4. Fallback only if webhook unset: MCP + `<@U0A7DVCKMMJ>`.
+
+**Lockbox email / Gmail:** **Do not** query Gmail in the daily flow. Deposit total and counts come from the day CSVs / `lockbox_report`. **Do not** post `*LOCKBOX EMAIL RECEIVED*` (or any email-arrived notice) to Slack. Only the post-lectura summary goes to `C0C8309D22C`.
 
 After they fix source files: confirm the three exports (and zip metadata if relevant). They may want the queue/lockbox left as-is so the misroute remains visible in the report — follow their instruction.
 

@@ -50,12 +50,18 @@ En un día limpio **no** hay `OG_`: serían idénticos a los de trabajo. Cuando 
 Nunca se sobrescriben. El pipeline ignora cualquier CSV o carpeta que empiece con `OG_`.
 Las correcciones van **solo** en los archivos de trabajo.
 
-## Corrección de comillas (el usuario la hace; el agente solo la identifica)
+## Corrección de comillas / comas (proponer → esperar OK)
 
-Cuando el audit marque `MALFORMED_QUOTE` o `MERGED_ROWS_DATA_LOSS` por comillas de más en el
-Payer, **el agente no edita los CSV**. Identifica el problema **textualmente**: archivo, línea,
-TID, el fragmento **roto** y el fragmento **corregido**. Espera a que el usuario corrija los
-archivos de trabajo y avise. **Nunca** editar `OG_*`.
+Cuando el audit marque `MALFORMED_QUOTE`, `MERGED_ROWS_DATA_LOSS` o comas sin comillas en el
+Payer:
+
+1. **No editar** los CSV de trabajo todavía. **Nunca** editar `OG_*`.
+2. **Proponer** el cambio de forma textual: archivo, línea, TID, fragmento **roto** vs
+   **corregido** (igual para invoice, check y metadata).
+3. **Preguntar** si lo aplica el agente o el usuario a mano. Solo editar tras un **sí explícito**
+   (“aplícalo tú”, “corrígelo”, etc.). Si el usuario corrige, esperar su aviso y confirmar.
+4. Tras la corrección (quien sea): confirmar con audit / sanity check y recordar **SFTP**.
+5. El mensaje del bot **no** se publica al detectar el misquote. Se publica al cerrar la lectura, ya con la corrección hecha, y tiene que decir que el misquote se detectó y se corrigió.
 
 **Regla a mostrar:** exactamente **2** comillas ASCII (`"`) — una al comienzo y una al final;
 cero adentro. Apóstrofes, comas y puntos no se tocan.
@@ -73,8 +79,9 @@ Invoice línea N:
 ## Recordatorio SFTP
 
 Cada vez que se corrija un archivo de trabajo del día (comillas, comas, mal ruteo, lo que sea),
-recordarle al usuario al final del reporte: **subir los archivos corregidos a la plataforma
-SFTP**. Es solo el recordatorio — el agente no sube nada.
+al final del reporte **en este chat** (no en Slack) subrayar el recordatorio en **negritas y
+MAYÚSCULAS**, p. ej. **VOLVER A SUBIR LOS ARCHIVOS CORREGIDOS A SFTP** (invoice, check y
+`metadata.csv` si aplican). Es solo el recordatorio — el agente no sube nada.
 
 ## Regla general
 
@@ -113,9 +120,9 @@ físicas crudas. El modo estricto de Python rechaza cualquier comilla que no sea
 (`""`) ni la comilla de cierre real — exactamente el caso que un parser permisivo "recupera" en
 silencio. Una comma legítima entre comillas (ej. `"...BOARD, INC."`) sigue pasando sin error.
 
-**Corrección (auto-fix, SÍ es seguro):** se elimina cualquier carácter `"` de sobra del Payer,
-dejando el resto del texto **intacto** (apóstrofes y demás puntuación NO se toca — solo comillas,
-comas y saltos de línea son los caracteres que rompen un CSV). No hay pérdida de Transaction
-Id/Invoice Number/montos, así que a diferencia de `MERGED_ROWS_DATA_LOSS` esto **no detiene el
-pipeline**: se corrige solo y se reporta en el resumen ("Cleaned N malformed-quote Payer
-value(s)"), igual que el caso normal de comas sin comillas.
+**Corrección (segura en contenido, pero no automática):** eliminar cualquier `"` de sobra del
+Payer, dejando el resto del texto **intacto** (apóstrofes y demás puntuación NO se tocan). No hay
+pérdida de Transaction Id/Invoice Number/montos. El pipeline **sí se detiene** hasta que alguien
+aplique el cambio (agente solo tras OK explícito, o el usuario a mano). El resumen del audit puede
+mostrar `payer(before) -> payer(after)` como propuesta; eso **no** significa que ya se reescribieron
+los CSV (`auto_fix=False` en el flujo normal).

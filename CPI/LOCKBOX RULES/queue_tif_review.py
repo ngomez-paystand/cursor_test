@@ -23,7 +23,9 @@ Page frames are read from each TIF for TIF Page Count and Needs Human. After the
 every unique TIF is rasterized to PNG under verification_previews/<Transaction Id>/ (part of
 the daily flow; do not delete).
 
-Needs Human? is yes when Merchant Match or Amount Match is not Matched, or TIF/export/page rules fail.
+Needs Human? is yes when Merchant Match or Amount Match is not Matched, or TIF/export/page rules fail,
+or when a possible duplicate check is detected (different Transaction IDs, same Mail Stop + Check Number,
+similar Payer — same physical check entered twice, often with a wrong amount on one row).
 Poor Scan (low OCR confidence) alone does not set Needs Human? when both matches are Matched.
 
 Local OCR compares CSV Merchant (payee) and Check Amount to text read from all pages of each TIF.
@@ -194,8 +196,16 @@ _MAIL_STOP_MERCHANT_LINES = """
 165	Early Stage Solutions, LLC
 166	Sharetru
 168	Global Surf Industries Inc
+169	nCino OpCo, Inc.
 170	Iantrek, Inc.
 171	Aloha Collection, Inc.
+172	TradePending LLC
+173	Branded Bills LLC
+174	NICE NORTH AMERICA LLC
+175	hh2 cloud services
+176	Avionté, LLC
+177	Milestone Internet Marketing, Inc.
+178	The Pension Source LLC
 201	Nonstop Administration and Insurance Services Inc - 201
 """
 
@@ -921,6 +931,176 @@ def _reason_append(labels: list[str], phrase: str) -> None:
         labels.append(phrase)
 
 
+_PAYER_SUFFIXES = (
+    " INC.",
+    " INC",
+    " LLC.",
+    " LLC",
+    " CORP.",
+    " CORP",
+    " LTD.",
+    " LTD",
+    " CO.",
+    " CO",
+    " COMPANY",
+)
+
+
+def _normalize_payer(payer: str) -> str:
+    p = (payer or "").upper().strip()
+    for suf in _PAYER_SUFFIXES:
+        if p.endswith(suf):
+            p = p[: -len(suf)].strip()
+    return "".join(ch for ch in p if ch.isalnum() or ch.isspace()).strip()
+
+
+def _payers_similar(a: str, b: str) -> bool:
+    """Equal/similar payer names (ignore Inc/LLC punctuation; allow containment / token overlap)."""
+    na, nb = _normalize_payer(a), _normalize_payer(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    if na in nb or nb in na:
+        return True
+    ta, tb = set(na.split()), set(nb.split())
+    if not ta or not tb:
+        return False
+    return (len(ta & tb) / max(len(ta), len(tb))) >= 0.7
+
+
+def flag_possible_duplicate_checks(
+    rows_out: list[dict], invoice_rows: list[dict]
+) -> int:
+    """Flag different TIDs that share Mail Stop + Check Number with similar Payer.
+
+    Same Transaction ID on multiple invoice lines is normal (multi-invoice) and is ignored.
+    Example: TID 48022923 $1462.89 and TID 48022956 $1462.24 — both check #17929 /
+    RUNNING FOR KICKS INC / MS 119 — look like the same check entered twice.
+
+    Returns how many queue rows were newly marked Needs Human? for this reason.
+    """
+    # TID -> export attributes (first non-empty wins)
+    by_tid: dict[str, dict[str, str]] = {}
+    for inv in invoice_rows:
+        tid = (inv.get("Transaction Id") or "").strip()
+        if not tid:
+            continue
+        cur = by_tid.setdefault(
+            tid,
+            {
+                "Mail Stop": "",
+                "Check Number": "",
+                "Payer": "",
+                "Check Amount": "",
+                "Routing Transit": "",
+                "DDA": "",
+            },
+        )
+        for key, src in (
+            ("Mail Stop", "Mail Stop"),
+            ("Check Number", "Check Number"),
+            ("Payer", "Payer"),
+            ("Check Amount", "Check Amount"),
+            ("Routing Transit", "Routing Transit"),
+            ("DDA", "DDA"),
+        ):
+            if not cur[key]:
+                cur[key] = (inv.get(src) or "").strip()
+
+    # Group unique TIDs by (Mail Stop, Check Number)
+    groups: dict[tuple[str, str], list[str]] = {}
+    for tid, meta in by_tid.items():
+        cn = meta["Check Number"]
+        ms = meta["Mail Stop"]
+        if not cn or not ms:
+            continue
+        groups.setdefault((ms, cn), []).append(tid)
+
+    # TID -> peer TIDs that form a duplicate cluster
+    dup_peers: dict[str, list[str]] = {}
+    for (ms, cn), tids in groups.items():
+        if len(tids) < 2:
+            continue
+        # Build clusters where payers are pairwise similar (transitive via union-find lite)
+        parent = {t: t for t in tids}
+
+        def find(x: str) -> str:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a: str, b: str) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        for i, ta in enumerate(tids):
+            for tb in tids[i + 1 :]:
+                if _payers_similar(by_tid[ta]["Payer"], by_tid[tb]["Payer"]):
+                    union(ta, tb)
+
+        clusters: dict[str, list[str]] = {}
+        for t in tids:
+            clusters.setdefault(find(t), []).append(t)
+        for members in clusters.values():
+            if len(members) < 2:
+                continue
+            for t in members:
+                dup_peers[t] = [x for x in members if x != t]
+
+    if not dup_peers:
+        return 0
+
+    flagged_rows = 0
+    for row in rows_out:
+        tid = (row.get("Transaction ID") or "").strip()
+        if tid not in dup_peers:
+            continue
+        peers = dup_peers[tid]
+        meta = by_tid[tid]
+        peer_bits = []
+        amounts = {meta["Check Amount"]} if meta["Check Amount"] else set()
+        for p in peers:
+            pm = by_tid[p]
+            amounts.add(pm["Check Amount"] or "")
+            peer_bits.append(
+                f"TID {p} amount {pm['Check Amount'] or '(blank)'} payer {pm['Payer'] or '(blank)'}"
+            )
+        amount_note = ""
+        nonempty_amts = {a for a in amounts if a}
+        if len(nonempty_amts) > 1:
+            amount_note = (
+                f" Check amounts differ across the duplicate set ({', '.join(sorted(nonempty_amts))})"
+                " — one entry may be mistyped."
+            )
+
+        reason = (row.get("Reason") or "").strip()
+        labels = [x.strip() for x in reason.split(";") if x.strip()] if reason else []
+        # Drop the success string if we are about to flag
+        if labels == ["Merchant and Check Amount matches."] or labels == [
+            "Merchant matches expected payee."
+        ]:
+            labels = []
+        _reason_append(labels, "Possible duplicate check")
+        row["Reason"] = "; ".join(labels)
+        if (row.get("Needs Human?") or "").strip().lower() != "yes":
+            flagged_rows += 1
+        row["Needs Human?"] = "yes"
+
+        note = (
+            f"Possible duplicate check: same Mail Stop {meta['Mail Stop']} + Check Number "
+            f"{meta['Check Number']} with similar Payer, but different Transaction ID(s): "
+            f"{'; '.join(peer_bits)}.{amount_note} Compare TIFs before clearing."
+        )
+        existing = (row.get("Scan Notes") or "").strip()
+        if "Possible duplicate check:" not in existing:
+            row["Scan Notes"] = f"{existing} {note}".strip() if existing else note
+
+    return flagged_rows
+
+
 def needs_human_reason(
     needs_human: bool,
     *,
@@ -938,12 +1118,14 @@ def needs_human_reason(
       TIF File Not Found; Could not read TIF page count;
       Missing merchant in CSV; Missing check amount in CSV; Missing merchant and check amount in CSV;
       Scan not legible; Merchant Doesn't Match; Check Amount Doesn't Match;
-      Merchant and Check Amount Don't Match; Poor Scan.
+      Merchant and Check Amount Don't Match; Poor Scan;
+      Possible duplicate check.
 
-    Separately, rows missing a CSV check amount where the TIF confidently contains no bank-check
-    image at all (mailed notice, legal filing, envelope, internal policy, vendor letter — see
+    Separately, rows missing a CSV check amount where the TIF does not look like a check
+    (no pay-to line and no legible check amount, or a known non-check phrase — see
     detect_non_check_document) short-circuit in build_record with Needs Human? = no and
-    Reason = "Not a check: <label>." before this function is even called.
+    Reason = "Not a check: <label>." A blank amount that still looks like a check stays
+    Needs Human.
     """
     if not needs_human:
         return "Merchant and Check Amount matches."
@@ -1020,6 +1202,16 @@ def build_record(
     if ex and "Export missing check amount" in export_issues:
         non_check_reason = detect_non_check_document(tif_path)
         if non_check_reason:
+            if non_check_reason.startswith("no check image"):
+                scan_notes = (
+                    "Check amount missing from export. TIF has no PAY TO THE ORDER OF "
+                    "anchor and no legible check amount; classified as not a check."
+                )
+            else:
+                scan_notes = (
+                    "TIF has no PAY TO THE ORDER OF anchor on any page; "
+                    f"OCR text matches known non-check pattern: {non_check_reason}."
+                )
             return {
                 "Mail Stop": (row.get("Mail Stop") or "").strip(),
                 "Deposit Date": (row.get("Deposit Date") or "").strip(),
@@ -1035,8 +1227,7 @@ def build_record(
                 "Amount Match": "Not Checked",
                 "TIF Path": tif_path.name,
                 "TIF Page Count": str(tif_page_count(tif_path)) if with_pages else "",
-                "Scan Notes": f"TIF has no PAY TO THE ORDER OF anchor on any page; "
-                f"OCR text matches known non-check pattern: {non_check_reason}.",
+                "Scan Notes": scan_notes,
             }
 
     scan = analyze_tif_against_csv(
@@ -1209,6 +1400,10 @@ def apply_visual_review_clears(queue_csv: Path, transaction_ids: list[str]) -> t
             continue
         found.add(tid)
         if (row.get("Needs Human?") or "").strip().lower() != "yes":
+            continue
+        reason_l = (row.get("Reason") or "").lower()
+        if "possible duplicate check" in reason_l:
+            # Do not treat duplicate-check flags as OCR false alarms.
             continue
         scan_type = (row.get("Scan Type") or "").strip()
         row["Needs Human?"] = "no"
@@ -1427,6 +1622,14 @@ def main() -> None:
                     merchant_aliases=merchant_aliases,
                 )
             )
+
+    dup_flagged = flag_possible_duplicate_checks(rows_out, invoice_rows)
+    if dup_flagged and not args.quiet:
+        print(
+            f"  Duplicate-check pass: newly flagged {dup_flagged} row(s) "
+            f"(same Check Number + similar Payer, different Transaction ID).",
+            flush=True,
+        )
 
     out_fields = [
         "Mail Stop",

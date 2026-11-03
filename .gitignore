@@ -19,6 +19,8 @@ CPI/JUNE/
 CPI/JULY/
 CPI/AUGUST/
 CPI/SEPTEMBER/
+CPI/OCTOBER/
+CPI/NOVEMBER/
 CPI/**/Paystand_*
 CPI/**/OG_*
 CPI/**/tif_*.csv
@@ -32,3 +34,6 @@ CPI/**/*.zip
 
 # Optional local reference docs (not needed for cloud agent)
 TABLA_SEMANTICA_*.txt
+
+# Lockbox webhook secrets (do not commit)
+CPI/LOCKBOX RULES/.secrets/

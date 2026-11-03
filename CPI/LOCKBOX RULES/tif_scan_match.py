@@ -176,6 +176,9 @@ _DEFAULT_MERCHANT_ALIASES: dict[str, list[str]] = {
         "HEALTH TECNOLOGIES INC",
         "NUTRITION ALLIANCE LLC",
         "Nutrition Alliance LLC",
+        "CRANDALL CORPORATE DIETITIANS",
+        "Crandall Corporate Dietitians",
+        "CRANDALL CORPORATE DIETITIANS - MS1",
     ],
     # Trade name on invoices / check stub; legal payee in Paystand export.
     # Checks often abbreviate "Company" as "CO."; Vision may misread BREWING as BRENNO (44268951).
@@ -916,7 +919,12 @@ def _vision_ocr_pil_rgb(pil_rgb) -> tuple[str, float | None]:
     return text, avg_conf
 
 
-def _ocr_tif_pages_vision(tif_path: Path) -> tuple[list[tuple[int, str, float | None]], str]:
+# Apple Vision sometimes never returns after many in-process requests. Each TIF
+# runs in its own process so a stuck image is killed and the row stays for review.
+_VISION_OCR_TIMEOUT_S = 60
+
+
+def _ocr_tif_pages_vision_impl(tif_path: Path) -> tuple[list[tuple[int, str, float | None]], str]:
     from PIL import Image
 
     pages: list[tuple[int, str, float | None]] = []
@@ -931,6 +939,49 @@ def _ocr_tif_pages_vision(tif_path: Path) -> tuple[list[tuple[int, str, float | 
     except Exception as e:
         return [], f"Could not OCR TIF (Apple Vision): {e}"
     return pages, ""
+
+
+def _vision_ocr_subprocess_entry(tif_path_str: str, conn) -> None:
+    try:
+        pages, err = _ocr_tif_pages_vision_impl(Path(tif_path_str))
+        conn.send((pages, err))
+    except Exception as e:
+        conn.send(([], f"Could not OCR TIF (Apple Vision): {e}"))
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _ocr_tif_pages_vision(tif_path: Path) -> tuple[list[tuple[int, str, float | None]], str]:
+    import multiprocessing
+
+    ctx = multiprocessing.get_context("spawn")
+    parent_conn, child_conn = ctx.Pipe(duplex=False)
+    proc = ctx.Process(
+        target=_vision_ocr_subprocess_entry,
+        args=(str(tif_path), child_conn),
+    )
+    proc.start()
+    child_conn.close()
+    try:
+        if not parent_conn.poll(_VISION_OCR_TIMEOUT_S):
+            proc.kill()
+            proc.join(5)
+            return [], f"Could not OCR TIF (Apple Vision): timed out after {_VISION_OCR_TIMEOUT_S}s"
+        try:
+            pages, err = parent_conn.recv()
+        except EOFError:
+            proc.join(5)
+            return [], "Could not OCR TIF (Apple Vision): OCR process ended without a result"
+        proc.join(5)
+        return pages, err
+    finally:
+        parent_conn.close()
+        if proc.is_alive():
+            proc.kill()
+            proc.join(5)
 
 
 @lru_cache(maxsize=None)
@@ -1291,10 +1342,12 @@ _NON_CHECK_DOCUMENT_PATTERNS: list[tuple[re.Pattern, str]] = [
 
 def detect_non_check_document(tif_path: Path) -> str | None:
     """
-    Best-effort, conservative check for "this TIF contains no real bank check" — used only when
-    the CSV export is missing a check amount, to tell "not a check" apart from "check amount
-    just wasn't captured". Returns a short reason string when confident, else None (never guess;
-    an unmatched/ambiguous document should still fall through to normal human review).
+    Used only when the CSV export is missing a check amount.
+
+    A blank amount is "not a check" unless the image looks like a check:
+    a pay-to-the-order line, or a legible check amount. A known non-check
+    phrase still supplies a specific label. Returns None when it looks like
+    a check (leave Needs Human) or when OCR failed (do not guess).
     """
     if not tif_path.is_file():
         return None
@@ -1309,7 +1362,9 @@ def detect_non_check_document(tif_path: Path) -> str | None:
     for pattern, label in _NON_CHECK_DOCUMENT_PATTERNS:
         if pattern.search(full_doc):
             return label
-    return None
+    if any(extract_amount_candidates(txt) for _, txt, _ in page_texts):
+        return None
+    return "no check image (no payee line and no check amount)"
 
 
 def analyze_tif_against_csv(

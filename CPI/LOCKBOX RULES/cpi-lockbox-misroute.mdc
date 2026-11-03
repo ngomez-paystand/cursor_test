@@ -12,36 +12,135 @@ Cuando el cheque va a un merchant conocido distinto del Mail Stop del CSV (p. ej
 
 En el resumen del día: **MAL RUTEO** arriba de todo (negritas/mayúsculas). Transaction ID, Mail Stop/merchant incorrecto vs payee correcto, monto. No enterrarlo con las falsas alarmas. Dejar `Needs Human? = yes` en queue/lockbox: el chiste del reporte es detectarlas. No “corregir” el queue para que parezca match.
 
-## 2. Snapshot OG_ (si aún no existen) y metadata de los tres archivos fuente
+## 2. Snapshot OG_ (si aún no existen) y proponer corrección en los tres archivos
 
-Antes de que el usuario edite nada, correr:
+Antes de que se edite nada, correr (si aún no hay `OG_`):
 
 ```bash
 python3 "LOCKBOX RULES/queue_tif_review.py" --run-dir <día> --snapshot-og
 ```
 
-Así quedan invoice, check y la carpeta Image completa en `OG_*` (originales). Luego el
-usuario corrige a mano los archivos de trabajo (`Paystand_*.csv` / `metadata.csv`) — todas
-las filas de esa Transaction ID, no solo una. **No editar `OG_*`.** No editar el zip.
-Confirmar después de su corrección y recordarle **subir los archivos corregidos a la
-plataforma SFTP**. Pronto el agente lo hará y el usuario supervisará.
+Así quedan invoice, check y la carpeta Image completa en `OG_*` (originales).
+
+**Proponer → esperar OK** (igual que comillas):
+
+1. Mostrar el cambio propuesto en **invoice, check y metadata** (todas las filas de esa
+   Transaction ID): p. ej. Mail Stop `162 → 161`, merchant incorrecto vs payee del cheque.
+2. **No editar** los CSV de trabajo hasta que el usuario diga si lo aplica el agente o lo hace
+   a mano. **Nunca** editar `OG_*`. No editar el zip.
+3. Tras la corrección: confirmar los tres archivos y, **en este chat**, recordar en **negritas y MAYÚSCULAS** **VOLVER A SUBIR A SFTP** (no en Slack).
+
+Queue/lockbox: dejar `Needs Human? = yes` salvo que el usuario pida regenerarlos.
 
 ## 3. Redactar el correo (no enviar salvo que lo pida)
 
 Plantilla en inglés. Sustituir merchant/MS/TID/monto del caso.
 
-Nombres de customer: solo el nombre comercial. Quitar sufijos legales (`Inc.`, `LLC`, `Corp.`, `Ltd.`, `LLP`, `PLLC`, `Co.`, y similares). Ejemplo: `Oofos Inc.` → `Oofos`; `ProctorU Inc.` → `ProctorU`; `Tripleseat Software LLC` → `Tripleseat Software`.
-
-`Check Info:`, `Transaction ID:` y `Check Amount:` van cada uno en su propia fila, con un salto de línea entre ellos. Nunca en la misma línea ni en el mismo párrafo.
+**Subject** (obligatorio al redactar el borrador):
 
 ```text
-Hi All, We had one check sent to the wrong mailstop today, please ensure the funds are sent to the right place. The check was incorrectly sent to Sharetru (MS 166), but should have been sent to Tripleseat Software (MS 160).
+Check Sent to Wrong Mailstop (CORRECT_MS, WRONG_MS)
+```
+
+Orden: primero el Mail Stop **correcto** (payee del cheque), luego el **incorrecto** (donde cayó). Ejemplo: `Check Sent to Wrong Mailstop (161, 162)`.
+
+Nombres de customer: solo el nombre comercial. Quitar sufijos legales (`Inc.`, `LLC`, `Corp.`, `Ltd.`, `LLP`, `PLLC`, `Co.`, y similares). Ejemplo: `Oofos Inc.` → `Oofos`; `ProctorU Inc.` → `ProctorU`; `Tripleseat Software LLC` → `Tripleseat Software`.
+
+`Check Info:`, `Transaction ID:` y `Check Amount:` van cada uno en su propia fila, **sin** líneas en blanco entre ellos. Nunca en la misma línea ni en el mismo párrafo.
+
+```text
+Subject: Check Sent to Wrong Mailstop (160, 166)
+
+Hi All,
+
+We had one check sent to the wrong mailstop today, please ensure the funds are sent to the right place. The check was incorrectly sent to Sharetru (MS 166), but should have been sent to Tripleseat Software (MS 160).
 
 Check Info:
-
 Transaction ID: 43473717
-
 Check Amount: $250
 
 Thank you,
 ```
+`Hi All,` va solo en su línea; el cuerpo empieza en la siguiente (con línea en blanco de por medio).
+
+## 4. Resumen diario en Slack (canal privado Nelson + Daniel)
+
+**Canal:** privado exclusivo Nelson + Daniel Milenko (`U0210C3PJVD`).  
+**Channel ID:** `C0C8309D22C` (activo).
+
+**Cuándo:** **después** de haber dado al usuario el resumen de la lectura **en este chat** (OCR + revisión visual + lockbox, o stop por quotes). Primero el reporte aquí; luego el mensaje en `C0C8309D22C`. No esperar a que lo pida. Envío **inmediato**. Destino ya confirmado.
+
+**Publicar como bot (notificaciones):** solo el resumen de **lectura** al canal. **No** postear `EMAIL RECEIVED`. Preferir Automation *CPI Lockbox Slack message* (webhook → bot de Cursor). Si el webhook falla (`resource_exhausted`, etc.): fallback `slack_send_message` + `<@U0A7DVCKMMJ>` al inicio.
+
+**Webhook** (Automation *CPI Lockbox Slack message* → Slack as Cursor bot):
+- Creds locales (gitignored): `CPI/LOCKBOX RULES/.secrets/lockbox_slack_webhook.env`
+  (`LOCKBOX_SLACK_WEBHOOK_URL`, `LOCKBOX_SLACK_WEBHOOK_KEY` — key tipo `crsr_…` del trigger Webhook)
+
+Desde el chat, al cerrar lectura (cargar el `.env` y POST):
+```bash
+set -a && source "LOCKBOX RULES/.secrets/lockbox_slack_webhook.env" && set +a
+python3 - <<'PY'
+import json, os, urllib.request
+msg = """<slack markdown body>"""
+req = urllib.request.Request(
+    os.environ["LOCKBOX_SLACK_WEBHOOK_URL"],
+    data=json.dumps({"message": msg}).encode(),
+    headers={
+        "Authorization": f"Bearer {os.environ['LOCKBOX_SLACK_WEBHOOK_KEY']}",
+        "Content-Type": "application/json",
+    },
+    method="POST",
+)
+print(urllib.request.urlopen(req).read().decode())
+PY
+```
+Si faltan creds: fallback temporal `slack_send_message` + `<@U0A7DVCKMMJ>` al inicio.
+
+**Misquote y el bot:** si el comma audit encuentra un misquote, **no** publicar el mensaje del bot en ese momento. Primero proponer, corregir (tras el sí), re-auditar y cerrar la lectura. El post va **después** de esa corrección, y *MISQUOTES* tiene que decir que **se detectó y se corrigió** (TID, estaba → quedó, invoice / check / metadata). Si el día no tiene misquote, *MISQUOTES:* OK al cerrar la lectura. No mencionar SFTP en Slack.
+
+**Mal ruteo:** puede ir en ese mismo post de cierre (*BAD ROUTES:* BAD) aunque el CSV aún no se haya corregido. No adelantar el post solo porque hay un misquote sin corregir.
+
+No spamear un segundo mensaje de cierre salvo que el usuario lo pida.
+
+### 4b. Correo Lockbox — sin Gmail ni post a Slack
+
+**No** consultar Gmail en el flujo diario. Deposit total y conteos salen de los CSV / `lockbox_report` del día. **No** publicar `*LOCKBOX EMAIL RECEIVED*` ni ningún aviso de correo en `C0C8309D22C`. Solo el resumen post-lectura (§4).
+
+Formato del resumen post-lectura en Slack: **todo en inglés** (sin emojis). Si hubo misquote, este mensaje sale solo cuando ya está corregido:
+
+```text
+*LOCKBOX MM-DD-YYYY*
+
+*MISQUOTES:* OK
+or, after the quote fix is already applied:
+*MISQUOTES:* DETECTED AND CORRECTED
+A misquote was detected and corrected.
+- TID …, MS …, $…: was `…` → now `…` (invoice, check, and metadata).
+
+*BAD ROUTES:* OK
+or
+*BAD ROUTES:* BAD
+- TID …: MS wrong (Merchant) → MS correct (Merchant), $amount
+
+*Email draft:* (only if *BAD ROUTES:* BAD; one per misroute)
+Subject: Check Sent to Wrong Mailstop (CORRECT_MS, WRONG_MS)
+
+Hi All,
+
+We had one check sent to the wrong mailstop today, please ensure the funds are sent to the right place. The check was incorrectly sent to WrongMerchant (MS WRONG), but should have been sent to CorrectMerchant (MS CORRECT).
+
+Check Info:
+Transaction ID: …
+Check Amount: $…
+
+Thank you,
+
+*Other:*
+- real pending items at lectura close (e.g. Needs Human that are not misroutes)
+- brief counts if useful (rows / Needs Human)
+- if nothing: None
+```
+
+Section labels are always English: *MISQUOTES*, *BAD ROUTES*, *Email draft*, *Other* — never *Otros* or other Spanish headings. Email draft follows §3 (short names, `Hi All,` on its own line, correct MS first in subject). Put the draft in a code block for easy copy. Omit *Email draft:* when there is no misroute.
+
+Si el Channel ID aún no está en la regla: **no inventar canal**; pedir al usuario que cree el privado, invite a Daniel y pase el ID/link; entonces actualizar esta regla y publicar.
