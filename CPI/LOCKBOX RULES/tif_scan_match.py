@@ -1306,7 +1306,7 @@ _NON_CHECK_DOCUMENT_PATTERNS: list[tuple[re.Pattern, str]] = [
         "envelope scan only, no check content",
     ),
     (
-        re.compile(r"\bDear\s+Vendor\b|\bDear\s+Employer\b", re.IGNORECASE),
+        re.compile(r"\bDear\s+(?:Valued\s+)?Vendor\b|\bDear\s+Employer\b", re.IGNORECASE),
         "vendor/employer notice letter",
     ),
     (

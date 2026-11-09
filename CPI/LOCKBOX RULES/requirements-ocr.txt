@@ -4,3 +4,4 @@
 Pillow>=10.0.0
 pytesseract>=0.3.10
 pyobjc-framework-Vision>=10.0; sys_platform == "darwin"
+openpyxl>=3.1.0
