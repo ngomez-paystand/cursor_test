@@ -115,11 +115,13 @@ Scan types:
 - **No Invoice** (Invoice Number empty/0): full check — merchant (via Mail Stop → `mail_stop_merchants.csv` + `merchant_aliases.csv`) and check amount must match the TIF.
 - **Invoice On File**: lighter misroute check only — flag only when OCR payee clearly matches a *different known* merchant.
 
-When the CSV check amount is missing, classify the TIF in `detect_non_check_document`:
+When the CSV check amount is missing, `detect_non_check_document` decides from the image, in order:
 
-- No pay-to line and no legible check amount → `Not a check` (even if the text is not in the curated list). A known phrase (EFT, envelope, escheatment, AvidXchange, etc.) only supplies a more specific label.
-- Pay-to line or a legible check amount → leave `Needs Human? = yes` (`Good? = n`). A blank amount on something that still looks like a check is not auto-cleared.
-- OCR failure or empty text → do not guess; leave it for review.
+1. OCR failure or empty text → do not guess; leave for review.
+2. Pay-to line, or a strong check marker on any page ("AUTHORIZED SIGNATURE", "DOLLARS", "xx/100", ABA fraction like `98-7107/3233`, "VOID AFTER") → it is a check; leave `Needs Human? = yes` (`Good? = n`).
+3. A known non-check phrase (EFT, envelope, escheatment, AvidXchange, vendor/contract/ownership-change letter, court filing, etc.) → `Not a check` with that specific label.
+4. A real money token (`$1,250`, `250.00`) or a weak check-face cue (BANK, MEMO, "Security Features", "Details on Back", 9-digit routing) → leave flagged; could be a check with an unreadable pay line.
+5. None of the above (no payee line, no check markers, no money) → `Not a check` ("no check image"). Zip codes, street numbers, dates and PO boxes are not money, so a mailed letter or envelope with no check clears itself without a new pattern per letter.
 
 ### C) Visual review of every `Needs Human? = yes` row (required)
 

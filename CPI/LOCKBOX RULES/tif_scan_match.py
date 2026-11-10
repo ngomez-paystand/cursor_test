@@ -1337,17 +1337,66 @@ _NON_CHECK_DOCUMENT_PATTERNS: list[tuple[re.Pattern, str]] = [
         re.compile(r"\bunclaimed\s+property\b|\bescheatment\b", re.IGNORECASE),
         "unclaimed-property / escheatment notice letter",
     ),
+    (
+        re.compile(
+            r"\bSERVICE\s+CONTRACT\s+NOTICE\b|\bhas\s+assigned\s+your\s+(?:service\s+)?contract\b",
+            re.IGNORECASE,
+        ),
+        "service contract / ownership-change notice letter",
+    ),
 ]
+
+# Check signals used by detect_non_check_document (OCR text of one page).
+# "Strong" signals only appear on the face of a check; any one keeps the row flagged.
+_STRONG_CHECK_SIGNALS = re.compile(
+    r"\bAUTHORI[SZ]ED\s+SIGNATURE\b|\bDOLLARS\b|\bVOID\s+AFTER\b|"
+    r"\b(?:NO|\d{1,2})\s*/\s*100\b|\bAND\s+(?:NO|\d{1,2})\s*/\s*100\b|"
+    r"(?<![\d/])\d{1,3}\s*-\s*\d{3,4}\s*/\s*\d{3,4}(?![\d/])",  # ABA fraction, e.g. 98-7107/3233
+    re.IGNORECASE,
+)
+# Weaker, check-face cues (fuzzy for OCR noise). Only consulted after known non-check
+# phrases are ruled out, together with money tokens: any one keeps the row flagged.
+_WEAK_CHECK_SIGNALS = re.compile(
+    r"\bBANK\b|\bCREDIT\s+UNION\b|\bMEMO\b|\bF[eo]atures\b|\bon\s+Back\b|"
+    r"\bDUPLICATE\b|(?<!\d)\d{9}(?!\d)|\bCHECK\s+ARMOR\b|\bPOSITIVE\s+PAY\b",
+    re.IGNORECASE,
+)
+# Real money tokens only: "$" amounts or numbers with cents. Zip codes, street numbers,
+# years, phones and PO boxes never match, unlike extract_amount_candidates (bare integers).
+_MONEY_SIGNAL = re.compile(
+    r"\$\s*\d[\d,]*(?:\.\d{1,2})?\b|(?<![\d,.])\d{1,3}(?:,\d{3})*\s*\.\s*\d{2}(?!\d)|"
+    r"(?<![\d,.])\d{1,6}\.\d{2}(?!\d)"
+)
+
+
+def _has_strong_check_signal(page_text: str) -> bool:
+    return bool(page_text and _STRONG_CHECK_SIGNALS.search(page_text))
+
+
+def _has_money_signal(page_text: str) -> bool:
+    return bool(
+        page_text
+        and (_MONEY_SIGNAL.search(page_text) or _WEAK_CHECK_SIGNALS.search(page_text))
+    )
 
 
 def detect_non_check_document(tif_path: Path) -> str | None:
     """
     Used only when the CSV export is missing a check amount.
 
-    A blank amount is "not a check" unless the image looks like a check:
-    a pay-to-the-order line, or a legible check amount. A known non-check
-    phrase still supplies a specific label. Returns None when it looks like
-    a check (leave Needs Human) or when OCR failed (do not guess).
+    Decides "not a check" from evidence on the image, in this order:
+
+    1. OCR failed or empty text -> None (do not guess; leave for review).
+    2. Pay-to-the-order line, or a strong check marker on any page ("AUTHORIZED
+       SIGNATURE", "DOLLARS", "xx/100", "VOID AFTER") -> None (it is a check).
+    3. A known non-check phrase (EFT, envelope, escheatment, vendor/contract letter,
+       etc.) -> that specific label.
+    4. A real money token ("$1,250", "250.00") or a weak check-face cue (BANK, MEMO,
+       "Security Features", "Details on Back", 9-digit routing) anywhere -> None (could
+       be a check with an unreadable pay line; leave Needs Human).
+    5. Otherwise (no payee line, no check markers, no money amount) -> "no check image".
+       Zip codes, street numbers, dates and PO boxes are NOT money, so a mailed
+       letter or envelope with no check lands here and clears itself.
     """
     if not tif_path.is_file():
         return None
@@ -1356,15 +1405,17 @@ def detect_non_check_document(tif_path: Path) -> str | None:
         return None
     if any(_pay_anchor_present(txt) for _, txt, _ in page_texts):
         return None
+    if any(_has_strong_check_signal(txt) for _, txt, _ in page_texts):
+        return None
     full_doc = "\n".join(t for _, t, _ in page_texts)
     if not full_doc.strip():
         return None
     for pattern, label in _NON_CHECK_DOCUMENT_PATTERNS:
         if pattern.search(full_doc):
             return label
-    if any(extract_amount_candidates(txt) for _, txt, _ in page_texts):
+    if any(_has_money_signal(txt) for _, txt, _ in page_texts):
         return None
-    return "no check image (no payee line and no check amount)"
+    return "no check image (no payee line, no check markers, no money amount)"
 
 
 def analyze_tif_against_csv(
